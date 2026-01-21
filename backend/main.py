@@ -47,7 +47,7 @@ def health_check():
 @app.post("/scan")
 async def trigger_scan(request: ScanRequest):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"scan_{timestamp}.png"
+    filename = f"scan_{timestamp}.bmp"
     
     try:
         if request.mock:
