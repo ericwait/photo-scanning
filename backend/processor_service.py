@@ -12,91 +12,87 @@ class ProcessorService:
     def detect_and_crop(self, image_path: str) -> List[str]:
         """
         Detects multiple photos in a single scanned page and crops them.
-        Uses a combination of thresholding and contour analysis.
+        Uses HSV saturation thresholding to isolate color prints from white backgrounds.
         """
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError(f"Could not read image at {image_path}")
 
-        # 1. Pre-processing: Convert to grayscale and blur
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+        # 1. Convert to HSV and extract Saturation channel
+        # Color photos have high saturation compared to white/gray backgrounds
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        s_channel = hsv[:,:,1]
         
-        # 2. Thresholding: We want to find the "non-white" parts
-        # Since photos have varying colors, we use an inverse threshold
-        # Assuming background is white (255), we threshold anything lower than 240
-        _, thresh = cv2.threshold(blurred, 245, 255, cv2.THRESH_BINARY_INV)
+        # 2. Threshold Saturation
+        # A low threshold like 20-30 picks up most colors
+        _, thresh = cv2.threshold(s_channel, 25, 255, cv2.THRESH_BINARY)
         
-        # 3. Morphological cleanup
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 10))
-        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        dilated = cv2.dilate(closed, kernel, iterations=1)
+        # 3. Morphological cleanup: Close small gaps and remove noise
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        morphed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        dilated = cv2.dilate(morphed, kernel, iterations=1)
 
         # 4. Find all contours
         contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter and process
+        # 5. Filter for photo-sized objects
         img_h, img_w = image.shape[:2]
         full_area = img_h * img_w
+        
+        # We expect typically 3 photos per page, but let's be flexible
+        photo_candidates = []
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            # Filter: must be at least 5% but less than 50% of the scanner bed
+            if (full_area * 0.05) < area < (full_area * 0.5):
+                photo_candidates.append(cnt)
+        
+        # Sort top-to-bottom based on the center of the bounding box
+        def get_center_y(cnt):
+            M = cv2.moments(cnt)
+            if M["m00"] == 0: return 0
+            return int(M["m01"] / M["m00"])
+            
+        photo_candidates.sort(key=get_center_y)
+        
         cropped_images_paths = []
         img_base_name = os.path.basename(image_path).split('.')[0]
         
-        photo_idx = 0
-        # Sort by area to process larger items first
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            # Skip noise and the background itself
-            if area < (full_area * 0.05): # Min 5% of scanner bed
-                continue
-            if area > (full_area * 0.95):
-                continue
+        for idx, cnt in enumerate(photo_candidates):
+            # Get the tight rotated bounding box
+            rect = cv2.minAreaRect(cnt)
             
-            # Approximate the contour to a rectangle
-            peri = cv2.arcLength(cnt, True)
-            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-            
-            # If not 4 corners, use the minAreaRect instead
-            if len(approx) == 4:
-                # Use the approx points for perspective transform
-                pts = approx.reshape(4, 2)
-            else:
-                rect = cv2.minAreaRect(cnt)
-                pts = cv2.boxPoints(rect)
-
             try:
                 # Extract and straighten
-                cropped = self._get_warped_crop(image, pts)
+                cropped = self._get_warped_crop_from_rect(image, rect)
                 
-                output_name = f"{img_base_name}_photo_{photo_idx}.jpg"
+                output_name = f"{img_base_name}_photo_{idx}.jpg"
                 output_path = os.path.join(self.output_dir, output_name)
                 cv2.imwrite(output_path, cropped)
                 cropped_images_paths.append(output_path)
-                photo_idx += 1
             except Exception as e:
-                print(f"Failed to process contour {photo_idx}: {e}")
+                print(f"Failed to process photo {idx}: {e}")
             
         return cropped_images_paths
 
-    def _get_warped_crop(self, image: np.ndarray, pts: np.ndarray) -> np.ndarray:
+    def _get_warped_crop_from_rect(self, image: np.ndarray, rect: Tuple) -> np.ndarray:
         """
-        Extracts a straightened crop using a 4-point perspective transform.
+        Extracts a straightened crop from a rotated rect using perspective warping.
         """
-        # Rectify point order: top-left, top-right, bottom-right, bottom-left
-        rect = np.zeros((4, 2), dtype="float32")
-        
-        s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)] # tl
-        rect[2] = pts[np.argmax(s)] # br
-        
-        diff = np.diff(pts, axis=1)
-        rect[1] = pts[np.argmin(diff)] # tr
-        rect[3] = pts[np.argmax(diff)] # bl
-        
-        (tl, tr, br, bl) = rect
+        box = cv2.boxPoints(rect)
+        box = np.array(box, dtype="float32")
 
-        # Compute width and height
+        # Order points: tl, tr, br, bl
+        # Sum: min = tl, max = br
+        # Diff: min = tr, max = bl
+        s = box.sum(axis=1)
+        tl = box[np.argmin(s)]
+        br = box[np.argmax(s)]
+        
+        diff = np.diff(box, axis=1)
+        tr = box[np.argmin(diff)]
+        bl = box[np.argmax(diff)]
+
         widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
         widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
         maxWidth = max(int(widthA), int(widthB))
@@ -111,7 +107,8 @@ class ProcessorService:
             [maxWidth - 1, maxHeight - 1],
             [0, maxHeight - 1]], dtype="float32")
 
-        M = cv2.getPerspectiveTransform(rect, dst)
+        src = np.array([tl, tr, br, bl], dtype="float32")
+        M = cv2.getPerspectiveTransform(src, dst)
         warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
         
         return warped
