@@ -180,7 +180,7 @@ function App() {
             <div className="grid grid-cols-1 gap-4">
               {currentScan?.photos.map((photo, idx) => (
                 <div key={idx} className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-lg group relative">
-                  <img src={photo.startsWith("http") || photo.includes("?t=") ? photo : `${API_BASE}${photo}`} alt={`Photo ${idx}`} className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-500" />
+                  <img src={photo.startsWith("http") ? photo : `${API_BASE}${photo}`} alt={`Photo ${idx}`} className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-500" />
                   <div className="p-4 flex justify-between items-center bg-slate-800/80 backdrop-blur-sm absolute bottom-0 w-full translate-y-full group-hover:translate-y-0 transition-transform">
                     <span className="text-sm font-medium">Photo {idx + 1}</span>
                     <button
