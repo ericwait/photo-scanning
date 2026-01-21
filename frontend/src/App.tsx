@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { RefineModal } from './RefineModal';
 
 interface ScanResult {
   status: string;
@@ -11,6 +12,10 @@ function App() {
   const [currentScan, setCurrentScan] = useState<ScanResult | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Refine Modal State
+  const [isRefineOpen, setIsRefineOpen] = useState(false);
+  const [refinePhotoIndex, setRefinePhotoIndex] = useState<number>(-1);
 
   const API_BASE = "http://localhost:8000";
 
@@ -53,8 +58,60 @@ function App() {
     }
   };
 
+  const openRefine = (index: number) => {
+    setRefinePhotoIndex(index);
+    setIsRefineOpen(true);
+  };
+
+  const handleRefineSave = async (points: number[][]) => {
+    if (!currentScan || refinePhotoIndex === -1) return;
+
+    try {
+      const response = await fetch(`${API_BASE}/refine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scan_path: currentScan.scan_path,
+          photo_index: refinePhotoIndex,
+          points: points
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to refine photo");
+      }
+
+      const data = await response.json();
+
+      // Update the local state with the new photo URL to reflect the change immediately
+      const newPhotoUrl = `${data.photo_url}?t=${Date.now()}`;
+
+      const updatedPhotos = [...currentScan.photos];
+      updatedPhotos[refinePhotoIndex] = newPhotoUrl;
+
+      setCurrentScan({
+        ...currentScan,
+        photos: updatedPhotos
+      });
+
+      setIsRefineOpen(false);
+      fetchHistory();
+
+    } catch (err: any) {
+      alert(`Error refining photo: ${err.message}`);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 p-8">
+      {currentScan && (
+        <RefineModal
+          isOpen={isRefineOpen}
+          onClose={() => setIsRefineOpen(false)}
+          onSave={handleRefineSave}
+          imageUrl={`${API_BASE}${currentScan.scan_path}`}
+        />
+      )}
       <header className="flex justify-between items-center mb-8 bg-slate-800 p-6 rounded-2xl shadow-xl border border-slate-700">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
@@ -123,10 +180,15 @@ function App() {
             <div className="grid grid-cols-1 gap-4">
               {currentScan?.photos.map((photo, idx) => (
                 <div key={idx} className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-lg group relative">
-                  <img src={`${API_BASE}${photo}`} alt={`Photo ${idx}`} className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-500" />
+                  <img src={photo.startsWith("http") || photo.includes("?t=") ? photo : `${API_BASE}${photo}`} alt={`Photo ${idx}`} className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-500" />
                   <div className="p-4 flex justify-between items-center bg-slate-800/80 backdrop-blur-sm absolute bottom-0 w-full translate-y-full group-hover:translate-y-0 transition-transform">
                     <span className="text-sm font-medium">Photo {idx + 1}</span>
-                    <button className="text-xs px-3 py-1 bg-blue-600 rounded-md hover:bg-blue-500 transition-colors">Refine</button>
+                    <button
+                      onClick={() => openRefine(idx)}
+                      className="text-xs px-3 py-1 bg-blue-600 rounded-md hover:bg-blue-500 transition-colors"
+                    >
+                      Refine
+                    </button>
                   </div>
                 </div>
               ))}

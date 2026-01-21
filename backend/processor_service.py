@@ -82,12 +82,40 @@ class ProcessorService:
             
         return cropped_images_paths
 
-    def _get_warped_crop_from_rect(self, image: np.ndarray, rect: Tuple) -> np.ndarray:
+    def manual_crop(self, image_path: str, points: List[List[int]], photo_index: int) -> str:
         """
-        Extracts a straightened crop from a rotated rect using perspective warping.
+        Manually crops a photo from the scan using 4 user-provided points.
+        points: List of [x, y] coordinates order: TL, TR, BR, BL
         """
-        box = cv2.boxPoints(rect)
-        box = np.array(box, dtype="float32")
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Could not read image at {image_path}")
+            
+        pts = np.array(points, dtype="float32")
+        
+        try:
+            cropped = self._get_warped_crop_from_rect(image, pts)
+            
+            img_base_name = os.path.basename(image_path).split('.')[0]
+            output_name = f"{img_base_name}_photo_{photo_index}.jpg"
+            output_path = os.path.join(self.output_dir, output_name)
+            
+            cv2.imwrite(output_path, cropped)
+            return output_path
+        except Exception as e:
+            print(f"Manual crop failed: {e}")
+            raise e
+
+    def _get_warped_crop_from_rect(self, image: np.ndarray, rect_or_pts) -> np.ndarray:
+        """
+        Extracts a straightened crop using perspective warping.
+        Accepts either a rotated rect tuple or a numpy array of 4 points.
+        """
+        if isinstance(rect_or_pts, tuple):
+            box = cv2.boxPoints(rect_or_pts)
+            pts = np.array(box, dtype="float32")
+        else:
+            pts = rect_or_pts
 
         # Order points: tl, tr, br, bl
         # Sum: min = tl, max = br

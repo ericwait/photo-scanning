@@ -70,6 +70,27 @@ async def trigger_scan(request: ScanRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class RefineRequest(BaseModel):
+    scan_path: str
+    photo_index: int
+    points: list[list[int]] # [[x,y], [x,y], [x,y], [x,y]]
+
+@app.post("/refine")
+async def refine_photo(request: RefineRequest):
+    try:
+        # scan_path comes as "/scans/filename.jpg", we need absolute path
+        filename = os.path.basename(request.scan_path)
+        filepath = os.path.join(SCAN_DIR, filename)
+        
+        output_path = processor.manual_crop(filepath, request.points, request.photo_index)
+        
+        return {
+            "status": "success",
+            "photo_url": f"/output/{os.path.basename(output_path)}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/history")
 async def get_history():
     # Basic history by listing output directory
