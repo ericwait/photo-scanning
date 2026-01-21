@@ -3,8 +3,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
 import datetime
-from .scanner_service import ScannerService
-from .processor_service import ProcessorService
+from scanner_service import ScannerService
+from processor_service import ProcessorService
 
 app = FastAPI()
 
