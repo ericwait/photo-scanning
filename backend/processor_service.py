@@ -114,29 +114,8 @@ class ProcessorService:
         if isinstance(rect_or_pts, tuple):
             box = cv2.boxPoints(rect_or_pts)
             pts = np.array(box, dtype="float32")
-    def rotate_photo(self, image_url: str, angle: float) -> str:
-        """
-        Rotates an existing photo by the specified angle (90 or -90 typically).
-        image_url is the relative path (e.g. /output/filename.jpg).
-        """
-        # Convert relative URL to absolute file path
-        filename = os.path.basename(image_url)
-        filepath = os.path.join(self.output_dir, filename)
-        
-        image = cv2.imread(filepath)
-        if image is None:
-            raise ValueError(f"Could not read image at {filepath}")
-            
-        if angle == 90:
-            rotated = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
-        elif angle == -90:
-            rotated = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
         else:
-            # Arbitrary rotation not implemented for simple buttons yet, use existing
-            raise ValueError("Only 90 and -90 supported efficiently")
-            
-        cv2.imwrite(filepath, rotated)
-        return filepath
+            pts = rect_or_pts
 
         # Order points: tl, tr, br, bl
         # Sum: min = tl, max = br
@@ -168,6 +147,30 @@ class ProcessorService:
         warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
         
         return warped
+
+    def rotate_photo(self, image_url: str, angle: float) -> str:
+        """
+        Rotates an existing photo by the specified angle (90 or -90 typically).
+        image_url is the relative path (e.g. /output/filename.jpg).
+        """
+        # Convert relative URL to absolute file path
+        filename = os.path.basename(image_url)
+        filepath = os.path.join(self.output_dir, filename)
+        
+        image = cv2.imread(filepath)
+        if image is None:
+            raise ValueError(f"Could not read image at {filepath}")
+            
+        if angle == 90:
+            rotated = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+        elif angle == -90:
+            rotated = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        else:
+            # Arbitrary rotation not implemented for simple buttons yet, use existing
+            raise ValueError("Only 90 and -90 supported efficiently")
+            
+        cv2.imwrite(filepath, rotated)
+        return filepath
 
 if __name__ == "__main__":
     # Internal test logic
