@@ -39,8 +39,8 @@ class ProcessorService:
         morphed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
         dilated = cv2.dilate(morphed, kernel, iterations=1)
 
-        # 4. Find all contours
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # 4. Find all contours - Use RETR_LIST to ensure we get internal contours if the background is detected
+        contours, _ = cv2.findContours(dilated, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         
         # 5. Filter for photo-sized objects
         img_h, img_w = image.shape[:2]
@@ -50,8 +50,9 @@ class ProcessorService:
         photo_candidates = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            # Filter: must be at least 5% but less than 50% of the scanner bed
-            if (full_area * 0.05) < area < (full_area * 0.5):
+            # Filter: must be at least 5% but less than 90% of the scanner bed
+            # We increased the upper bound slightly just in case, but usually photos are < 50%
+            if (full_area * 0.05) < area < (full_area * 0.90):
                 photo_candidates.append(cnt)
         
         # Sort top-to-bottom based on the center of the bounding box
@@ -83,10 +84,13 @@ class ProcessorService:
             rect = (center, size, angle)
             
             try:
+                # Extract and straighten
                 cropped = self._get_warped_crop_from_rect(image, rect)
-                output_name = f"{img_base_name}_photo_{len(cropped_images_paths)}.jpg"
+                
+                output_name = f"{img_base_name}_photo_{len(cropped_images_paths)}.png"
                 output_path = os.path.join(self.output_dir, output_name)
-                cv2.imwrite(output_path, cropped)
+                # PNG compression: 0-9. 3 is a good balance.
+                cv2.imwrite(output_path, cropped, [cv2.IMWRITE_PNG_COMPRESSION, 3])
                 cropped_images_paths.append(output_path)
             except Exception as e:
                 print(f"Failed to process photo candidate {idx}: {e}")
@@ -104,7 +108,7 @@ class ProcessorService:
             text2 = "Click 'Refine Crop' to set manually"
             cv2.putText(placeholder, text2, (80, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1)
             
-            output_name = f"{img_base_name}_photo_{idx}.jpg"
+            output_name = f"{img_base_name}_photo_{idx}.png"
             output_path = os.path.join(self.output_dir, output_name)
             cv2.imwrite(output_path, placeholder)
             cropped_images_paths.append(output_path)
