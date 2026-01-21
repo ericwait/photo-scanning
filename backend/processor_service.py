@@ -59,8 +59,15 @@ class ProcessorService:
         img_base_name = os.path.basename(image_path).split('.')[0]
         
         for idx, cnt in enumerate(photo_candidates):
-            # Get the tight rotated bounding box
-            rect = cv2.minAreaRect(cnt)
+            # Use convex hull to smooth out detections and get a more stable box
+            hull = cv2.convexHull(cnt)
+            rect = cv2.minAreaRect(hull)
+            
+            # Slightly shrink the box to ensure we don't pick up white margins
+            # Shrink by 1% of dimensions or 5 pixels
+            (center, size, angle) = rect
+            size = (size[0] * 0.98, size[1] * 0.98) # Shrink 2%
+            rect = (center, size, angle)
             
             try:
                 # Extract and straighten
