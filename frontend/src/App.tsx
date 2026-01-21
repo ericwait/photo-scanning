@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { RefineModal } from './RefineModal';
 
 interface ScanResult {
@@ -10,28 +10,22 @@ interface ScanResult {
 function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [currentScan, setCurrentScan] = useState<ScanResult | null>(null);
-  const [history, setHistory] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Refine Modal State
   const [isRefineOpen, setIsRefineOpen] = useState(false);
   const [refinePhotoIndex, setRefinePhotoIndex] = useState<number>(-1);
 
+  // Scan Settings
+  const [albumName, setAlbumName] = useState("Default");
+  const [sensitivity, setSensitivity] = useState(210);
+  const [cropMargin, setCropMargin] = useState(10);
+  const [showSettings, setShowSettings] = useState(false);
+
   const API_BASE = "http://localhost:8000";
 
-  const fetchHistory = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/history`);
-      const data = await response.json();
-      setHistory(data.photos);
-    } catch (err) {
-      console.error("Failed to fetch history", err);
-    }
-  };
+  // Removed fetchHistory as history panel is gone
 
-  useEffect(() => {
-    fetchHistory();
-  }, []);
 
   const handleScan = async (mock = false) => {
     setIsScanning(true);
@@ -40,7 +34,13 @@ function App() {
       const response = await fetch(`${API_BASE}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mock: mock, mock_source: mock ? "test_scanner_bed.png" : "" })
+        body: JSON.stringify({
+          mock: mock,
+          mock_source: mock ? "test_scanner_bed.png" : "",
+          album_name: albumName,
+          sensitivity: sensitivity,
+          crop_margin: cropMargin
+        })
       });
 
       if (!response.ok) {
@@ -50,7 +50,6 @@ function App() {
 
       const data: ScanResult = await response.json();
       setCurrentScan(data);
-      fetchHistory();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -73,7 +72,8 @@ function App() {
         body: JSON.stringify({
           scan_path: currentScan.scan_path,
           photo_index: refinePhotoIndex,
-          points: points
+          points: points,
+          album_name: albumName
         })
       });
 
@@ -84,7 +84,8 @@ function App() {
       const data = await response.json();
 
       // Update the local state with the new photo URL to reflect the change immediately
-      const newPhotoUrl = `${data.photo_url}?t=${Date.now()}`;
+      const separator = data.photo_url.includes('?') ? '&' : '?';
+      const newPhotoUrl = `${data.photo_url}${separator}t=${Date.now()}`;
 
       const updatedPhotos = [...currentScan.photos];
       updatedPhotos[refinePhotoIndex] = newPhotoUrl;
@@ -95,7 +96,6 @@ function App() {
       });
 
       setIsRefineOpen(false);
-      fetchHistory();
 
     } catch (err: any) {
       alert(`Error refining photo: ${err.message}`);
@@ -106,8 +106,8 @@ function App() {
     if (!currentScan) return;
     const photoUrl = currentScan.photos[index];
 
-    // If photoUrl contains query param, we should strip it for the key
-    const cleanUrl = photoUrl.split('?')[0];
+    // Remove timestamp param (either ?t=... or &t=...) to get clean ID
+    const cleanUrl = photoUrl.replace(/([?&])t=\d+$/, '');
 
     try {
       const response = await fetch(`${API_BASE}/rotate`, {
@@ -122,7 +122,8 @@ function App() {
       if (!response.ok) throw new Error("Rotate failed");
 
       // Force refresh with new timestamp
-      const newPhotoUrl = `${cleanUrl}?t=${Date.now()}`;
+      const separator = cleanUrl.includes('?') ? '&' : '?';
+      const newPhotoUrl = `${cleanUrl}${separator}t=${Date.now()}`;
       const updatedPhotos = [...currentScan.photos];
       updatedPhotos[index] = newPhotoUrl;
 
@@ -170,6 +171,72 @@ function App() {
           </button>
         </div>
       </header>
+
+      {/* Settings Panel */}
+      <div className="mb-8">
+        <button
+          onClick={() => setShowSettings(!showSettings)}
+          className="text-slate-400 hover:text-white flex items-center gap-2 text-sm font-semibold mb-2 transition-colors"
+        >
+          {showSettings ? "▼ Hide Settings" : "▶ Show Advanced Settings"}
+        </button>
+
+        {showSettings && (
+          <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in-down">
+            {/* Output Folder / Album */}
+            <div>
+              <label className="block text-sm font-medium text-slate-400 mb-2">
+                Output Folder (Absolute Path or Subfolder)
+              </label>
+              <input
+                type="text"
+                value={albumName}
+                onChange={(e) => setAlbumName(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                placeholder="e.g. Vacation 2024"
+              />
+            </div>
+
+            {/* Detection Sensitivity */}
+            <div>
+              <div className="flex justify-between mb-2">
+                <label className="text-sm font-medium text-slate-400">
+                  Detection Sensitivity (Threshold)
+                </label>
+                <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded">{sensitivity}</span>
+              </div>
+              <input
+                type="range"
+                min="150"
+                max="250"
+                value={sensitivity}
+                onChange={(e) => setSensitivity(Number(e.target.value))}
+                className="w-full accent-blue-500 h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer"
+              />
+              <p className="text-xs text-slate-500 mt-1">Lower = requires darker photos. Higher = picks up more (risk of background).</p>
+            </div>
+
+            {/* Crop Margin */}
+            <div>
+              <div className="flex justify-between mb-2">
+                <label className="text-sm font-medium text-slate-400">
+                  Crop Tightness (Margin px)
+                </label>
+                <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded">{cropMargin}px</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="50"
+                value={cropMargin}
+                onChange={(e) => setCropMargin(Number(e.target.value))}
+                className="w-full accent-emerald-500 h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer"
+              />
+              <p className="text-xs text-slate-500 mt-1">Pixels to shave off the edges. Increase if seeing white borders.</p>
+            </div>
+          </div>
+        )}
+      </div>
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/50 text-red-400 p-4 rounded-xl mb-8">

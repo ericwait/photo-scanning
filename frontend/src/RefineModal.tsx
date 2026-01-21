@@ -65,7 +65,6 @@ export function RefineModal({ isOpen, onClose, onSave, imageUrl }: RefineModalPr
                             if (!imgRef.current) return null;
                             // We need to map natural coords (p) back to displayed coords
                             // This requires a re-render when image loads/resizes, but for now simple math on render
-                            const rect = imgRef.current.getBoundingClientRect();
                             // Wait, we can't get rect during render efficiently without specific state.
                             // BUT, if we position markers using percentages, it works!
                             // p[0] is x, p[1] is y. 

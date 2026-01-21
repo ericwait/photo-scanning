@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -39,10 +40,18 @@ class ScanRequest(BaseModel):
     album_name: str = "default"
     mock: bool = False
     mock_source: str = ""
+    sensitivity: int = 210
+    crop_margin: int = 10
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.get("/images")
+async def get_image(path: str):
+    if not os.path.exists(path):
+        raise HTTPException(404, "Image not found")
+    return FileResponse(path)
 
 @app.post("/scan")
 async def trigger_scan(request: ScanRequest):
@@ -60,12 +69,40 @@ async def trigger_scan(request: ScanRequest):
             scan_path = scanner.scan_page(filename)
         
         # Process the scan immediately
-        cropped_paths = processor.detect_and_crop(scan_path)
+        cropped_paths = processor.detect_and_crop(
+            scan_path, 
+            output_subfolder=request.album_name,
+            sensitivity=request.sensitivity,
+            crop_margin=request.crop_margin
+        )
         
+        # Modify returned paths to be URLs
+        processed_urls = []
+        for p in cropped_paths:
+            # If subfolder is used, p is absolute path. We need relative URL.
+            # Assuming OUTPUT_DIR is the root served at /output
+            
+            # Check if it is inside OUTPUT_DIR
+            rel_path = None
+            try:
+                if os.path.commonpath([p, OUTPUT_DIR]) == OUTPUT_DIR:
+                     rel_path = os.path.relpath(p, OUTPUT_DIR)
+            except:
+                pass # Different drives or paths
+
+            if rel_path:
+                 # Ensure forward slashes for URL
+                 url_path = f"/output/{rel_path}".replace("\\", "/")
+                 processed_urls.append(url_path)
+            else:
+                 # Absolute path outside of project structure
+                 url_path = f"/images?path={p}"
+                 processed_urls.append(url_path)
+    
         return {
             "status": "success",
             "scan_path": f"/scans/{filename}",
-            "photos": [f"/output/{os.path.basename(p)}" for p in cropped_paths]
+            "photos": processed_urls
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -74,19 +111,31 @@ class RefineRequest(BaseModel):
     scan_path: str
     photo_index: int
     points: list[list[int]] # [[x,y], [x,y], [x,y], [x,y]]
+    album_name: str = "default"
 
 @app.post("/refine")
 async def refine_photo(request: RefineRequest):
     try:
         # scan_path comes as "/scans/filename.jpg", we need absolute path
+        # Assume scan is always in SCAN_DIR for now (managed by us)
         filename = os.path.basename(request.scan_path)
         filepath = os.path.join(SCAN_DIR, filename)
         
-        output_path = processor.manual_crop(filepath, request.points, request.photo_index)
+        output_path = processor.manual_crop(filepath, request.points, request.photo_index, output_subfolder=request.album_name)
         
+        # Determine strict URL return
+        url_path = f"/images?path={output_path}" # Fallback
+        try:
+             # Try standard relative first
+             if os.path.commonpath([output_path, OUTPUT_DIR]) == OUTPUT_DIR:
+                rel = os.path.relpath(output_path, OUTPUT_DIR)
+                url_path = f"/output/{rel}".replace("\\", "/")
+        except:
+             pass
+
         return {
             "status": "success",
-            "photo_url": f"/output/{os.path.basename(output_path)}"
+            "photo_url": url_path
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -98,7 +147,27 @@ class RotateRequest(BaseModel):
 @app.post("/rotate")
 async def rotate_photo(request: RotateRequest):
     try:
-        processor.rotate_photo(request.photo_url, request.angle)
+        # Decode photo_url to absolute path
+        p = request.photo_url
+        abs_path = ""
+        
+        if p.startswith("/output/"):
+            # Relative to output dir. 
+            # p might be /output/subfolder/file.png OR /output/file.png
+            # Strip /output/
+            rel = p[len("/output/"):]
+            abs_path = os.path.join(OUTPUT_DIR, rel)
+        elif "/images?path=" in p:
+             # Extract path param
+             # Simple string split? "path="
+             abs_path = p.split("path=")[1]
+             # If url encoded? Frontend might send raw.
+             # Assuming standard string for now.
+        else:
+             # Fallback, maybe it's just a filename?
+             abs_path = os.path.join(OUTPUT_DIR, os.path.basename(p))
+
+        processor.rotate_photo(abs_path, request.angle)
         return {
             "status": "success",
             "photo_url": request.photo_url

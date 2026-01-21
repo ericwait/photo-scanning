@@ -9,14 +9,30 @@ class ProcessorService:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-    def detect_and_crop(self, image_path: str) -> List[str]:
+    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10) -> List[str]:
         """
         Detects multiple photos in a single scanned page and crops them.
         Uses HSV saturation thresholding to isolate color prints from white backgrounds.
+        Args:
+            image_path: Path to the scanned image.
+            output_subfolder: Optional subfolder name within output_dir to save photos.
+            sensitivity: Value channel threshold (lower = more sensitive to darks, higher = ignores more background). Default 210.
+            crop_margin: Number of pixels to crop from each edge of the detected photo. Default 10.
         """
         image = cv2.imread(image_path)
         if image is None:
             raise ValueError(f"Could not read image at {image_path}")
+
+        # Determine output directory
+        current_output_dir = self.output_dir
+        if output_subfolder:
+            if os.path.isabs(output_subfolder):
+                current_output_dir = output_subfolder
+            else:
+                current_output_dir = os.path.join(self.output_dir, output_subfolder)
+            
+            if not os.path.exists(current_output_dir):
+                os.makedirs(current_output_dir)
 
         # 1. Convert to HSV
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -28,8 +44,8 @@ class ProcessorService:
         _, s_thresh = cv2.threshold(s_channel, 30, 255, cv2.THRESH_BINARY)
         
         # Mask 2: Value (Brightness). Catch dark items on white background.
-        # Scanner background is usually near 255. Photos are darker.
-        _, v_thresh = cv2.threshold(v_channel, 250, 255, cv2.THRESH_BINARY_INV)
+        v_thresh_val = sensitivity 
+        _, v_thresh = cv2.threshold(v_channel, v_thresh_val, 255, cv2.THRESH_BINARY_INV)
         
         # Combine: It's a photo if it has color OR is dark
         combined_mask = cv2.bitwise_or(s_thresh, v_thresh)
@@ -37,10 +53,12 @@ class ProcessorService:
         # 3. Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         morphed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
-        dilated = cv2.dilate(morphed, kernel, iterations=1)
+        # REMOVED dilation to prevent expanding the border
+        # dilated = cv2.dilate(morphed, kernel, iterations=1)
 
         # 4. Find all contours - Use RETR_LIST to ensure we get internal contours if the background is detected
-        contours, _ = cv2.findContours(dilated, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        # Use 'morphed' instead of 'dilated'
+        contours, _ = cv2.findContours(morphed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         
         # 5. Filter for photo-sized objects
         img_h, img_w = image.shape[:2]
@@ -85,10 +103,10 @@ class ProcessorService:
             
             try:
                 # Extract and straighten
-                cropped = self._get_warped_crop_from_rect(image, rect)
+                cropped = self._get_warped_crop_from_rect(image, rect, crop_margin=crop_margin)
                 
                 output_name = f"{img_base_name}_photo_{len(cropped_images_paths)}.png"
-                output_path = os.path.join(self.output_dir, output_name)
+                output_path = os.path.join(current_output_dir, output_name)
                 # PNG compression: 0-9. 3 is a good balance.
                 cv2.imwrite(output_path, cropped, [cv2.IMWRITE_PNG_COMPRESSION, 3])
                 cropped_images_paths.append(output_path)
@@ -109,13 +127,13 @@ class ProcessorService:
             cv2.putText(placeholder, text2, (80, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1)
             
             output_name = f"{img_base_name}_photo_{idx}.png"
-            output_path = os.path.join(self.output_dir, output_name)
+            output_path = os.path.join(current_output_dir, output_name)
             cv2.imwrite(output_path, placeholder)
             cropped_images_paths.append(output_path)
             
         return cropped_images_paths
 
-    def manual_crop(self, image_path: str, points: List[List[int]], photo_index: int) -> str:
+    def manual_crop(self, image_path: str, points: List[List[int]], photo_index: int, output_subfolder: str = None) -> str:
         """
         Manually crops a photo from the scan using 4 user-provided points.
         points: List of [x, y] coordinates order: TL, TR, BR, BL
@@ -124,14 +142,27 @@ class ProcessorService:
         if image is None:
             raise ValueError(f"Could not read image at {image_path}")
             
+        # Determine output directory
+        current_output_dir = self.output_dir
+        if output_subfolder:
+            if os.path.isabs(output_subfolder):
+                current_output_dir = output_subfolder
+            else:
+                current_output_dir = os.path.join(self.output_dir, output_subfolder)
+            
+            if not os.path.exists(current_output_dir):
+                os.makedirs(current_output_dir)
+
         pts = np.array(points, dtype="float32")
         
         try:
-            cropped = self._get_warped_crop_from_rect(image, pts)
+            # Manual crop generally implies no safety margin needed, or minimal, 
+            # since user clicked exact points. Let's default to 0 for manual.
+            cropped = self._get_warped_crop_from_rect(image, pts, crop_margin=0)
             
             img_base_name = os.path.splitext(os.path.basename(image_path))[0]
             output_name = f"{img_base_name}_photo_{photo_index}.png"
-            output_path = os.path.join(self.output_dir, output_name)
+            output_path = os.path.join(current_output_dir, output_name)
             
             cv2.imwrite(output_path, cropped, [cv2.IMWRITE_PNG_COMPRESSION, 3])
             return output_path
@@ -139,7 +170,7 @@ class ProcessorService:
             print(f"Manual crop failed: {e}")
             raise e
 
-    def _get_warped_crop_from_rect(self, image: np.ndarray, rect_or_pts) -> np.ndarray:
+    def _get_warped_crop_from_rect(self, image: np.ndarray, rect_or_pts, crop_margin: int = 10) -> np.ndarray:
         """
         Extracts a straightened crop using perspective warping.
         Accepts either a rotated rect tuple or a numpy array of 4 points.
@@ -176,19 +207,23 @@ class ProcessorService:
             [0, maxHeight - 1]], dtype="float32")
 
         src = np.array([tl, tr, br, bl], dtype="float32")
-        M = cv2.getPerspectiveTransform(src, dst)
-        warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
+        M = cv2.getPerspectiveTransform(src, dst)        # Warp
+        warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight), flags=cv2.INTER_LINEAR)
         
+        # Apply Safety Margin (Inactive Crop) to remove jagged edges/white borders
+        # Crop 'crop_margin' pixels from each side
+        h_final, w_final = warped.shape[:2]
+        if crop_margin > 0 and h_final > (crop_margin * 2) and w_final > (crop_margin * 2):
+            warped = warped[crop_margin:-crop_margin, crop_margin:-crop_margin]
+
         return warped
 
-    def rotate_photo(self, image_url: str, angle: float) -> str:
+    def rotate_photo(self, image_path: str, angle: float) -> str:
         """
         Rotates an existing photo by the specified angle (90 or -90 typically).
-        image_url is the relative path (e.g. /output/filename.png).
+        image_path: Absolute path to the photo file.
         """
-        # Convert relative URL to absolute file path
-        filename = os.path.basename(image_url)
-        filepath = os.path.join(self.output_dir, filename)
+        filepath = image_path
         
         image = cv2.imread(filepath)
         if image is None:
