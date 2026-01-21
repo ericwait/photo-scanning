@@ -91,6 +91,21 @@ async def refine_photo(request: RefineRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+class RotateRequest(BaseModel):
+    photo_url: str
+    angle: int # 90 or -90
+
+@app.post("/rotate")
+async def rotate_photo(request: RotateRequest):
+    try:
+        processor.rotate_photo(request.photo_url, request.angle)
+        return {
+            "status": "success",
+            "photo_url": request.photo_url
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/history")
 async def get_history():
     # Basic history by listing output directory
