@@ -24,11 +24,11 @@ class ProcessorService:
         s_channel = hsv[:,:,1]
         
         # 2. Threshold Saturation
-        # A low threshold like 20-30 picks up most colors
-        _, thresh = cv2.threshold(s_channel, 25, 255, cv2.THRESH_BINARY)
+        # A higher threshold ensures we pick up strong colors only, ignoring "off-white" paper
+        _, thresh = cv2.threshold(s_channel, 45, 255, cv2.THRESH_BINARY)
         
-        # 3. Morphological cleanup: Close small gaps and remove noise
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        # 3. Morphological cleanup: Close small gaps but don't expand too much
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         morphed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         dilated = cv2.dilate(morphed, kernel, iterations=1)
 
