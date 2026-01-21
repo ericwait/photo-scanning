@@ -120,13 +120,13 @@ class ProcessorService:
         # Order points: tl, tr, br, bl
         # Sum: min = tl, max = br
         # Diff: min = tr, max = bl
-        s = box.sum(axis=1)
-        tl = box[np.argmin(s)]
-        br = box[np.argmax(s)]
+        s = pts.sum(axis=1)
+        tl = pts[np.argmin(s)]
+        br = pts[np.argmax(s)]
         
-        diff = np.diff(box, axis=1)
-        tr = box[np.argmin(diff)]
-        bl = box[np.argmax(diff)]
+        diff = np.diff(pts, axis=1)
+        tr = pts[np.argmin(diff)]
+        bl = pts[np.argmax(diff)]
 
         widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
         widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
