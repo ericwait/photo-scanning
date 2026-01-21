@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { RefineModal } from './RefineModal';
 
 interface ScanResult {
@@ -17,10 +17,24 @@ function App() {
   const [refinePhotoIndex, setRefinePhotoIndex] = useState<number>(-1);
 
   // Scan Settings
-  const [albumName, setAlbumName] = useState("Default");
-  const [sensitivity, setSensitivity] = useState(210);
-  const [cropMargin, setCropMargin] = useState(10);
-  const [showSettings, setShowSettings] = useState(false);
+  // Scan Settings - Initialize from localStorage if available
+  const [albumName, setAlbumName] = useState(() => localStorage.getItem('albumName') || "Default");
+  const [sensitivity, setSensitivity] = useState(() => Number(localStorage.getItem('sensitivity')) || 210);
+  const [cropMargin, setCropMargin] = useState(() => Number(localStorage.getItem('cropMargin')) || 10);
+  const [contrast, setContrast] = useState(() => {
+    const saved = localStorage.getItem('contrast');
+    return saved ? Number(saved) : 1.0;
+  });
+  const [autoWb, setAutoWb] = useState(() => localStorage.getItem('autoWb') === 'true');
+  const [showSettings, setShowSettings] = useState(() => localStorage.getItem('showSettings') === 'true');
+
+  // Persist settings changes
+  useEffect(() => { localStorage.setItem('albumName', albumName); }, [albumName]);
+  useEffect(() => { localStorage.setItem('sensitivity', String(sensitivity)); }, [sensitivity]);
+  useEffect(() => { localStorage.setItem('cropMargin', String(cropMargin)); }, [cropMargin]);
+  useEffect(() => { localStorage.setItem('contrast', String(contrast)); }, [contrast]);
+  useEffect(() => { localStorage.setItem('autoWb', String(autoWb)); }, [autoWb]);
+  useEffect(() => { localStorage.setItem('showSettings', String(showSettings)); }, [showSettings]);
 
   const API_BASE = "http://localhost:8000";
 
@@ -39,7 +53,9 @@ function App() {
           mock_source: mock ? "test_scanner_bed.png" : "",
           album_name: albumName,
           sensitivity: sensitivity,
-          crop_margin: cropMargin
+          crop_margin: cropMargin,
+          contrast: contrast,
+          auto_wb: autoWb
         })
       });
 
@@ -233,6 +249,47 @@ function App() {
                 className="w-full accent-emerald-500 h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer"
               />
               <p className="text-xs text-slate-500 mt-1">Pixels to shave off the edges. Increase if seeing white borders.</p>
+            </div>
+
+            {/* Contrast Boost */}
+            <div>
+              <div className="flex justify-between mb-2">
+                <label className="text-sm font-medium text-slate-400">
+                  Contrast Boost
+                </label>
+                <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded">{contrast}x</span>
+              </div>
+              <input
+                type="range"
+                min="1.0"
+                max="2.0"
+                step="0.1"
+                value={contrast}
+                onChange={(e) => setContrast(Number(e.target.value))}
+                className="w-full accent-purple-500 h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer"
+              />
+              <p className="text-xs text-slate-500 mt-1">Increase to make faded colors pop.</p>
+            </div>
+
+            {/* Auto White Balance */}
+            <div className="flex items-center gap-4">
+              <div className="flex-1">
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className={`w-6 h-6 rounded border flex items-center justify-center transition-colors ${autoWb ? 'bg-blue-600 border-blue-600' : 'bg-slate-900 border-slate-700'}`}>
+                    {autoWb && <span className="text-white text-sm">✓</span>}
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="hidden"
+                    checked={autoWb}
+                    onChange={(e) => setAutoWb(e.target.checked)}
+                  />
+                  <div>
+                    <span className="block text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Auto White Balance</span>
+                    <p className="text-xs text-slate-500 mt-1">Corrects yellow/warm tints automatically.</p>
+                  </div>
+                </label>
+              </div>
             </div>
           </div>
         )}

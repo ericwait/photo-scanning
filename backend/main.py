@@ -42,6 +42,8 @@ class ScanRequest(BaseModel):
     mock_source: str = ""
     sensitivity: int = 210
     crop_margin: int = 10
+    contrast: float = 1.0
+    auto_wb: bool = False
 
 @app.get("/health")
 def health_check():
@@ -73,7 +75,9 @@ async def trigger_scan(request: ScanRequest):
             scan_path, 
             output_subfolder=request.album_name,
             sensitivity=request.sensitivity,
-            crop_margin=request.crop_margin
+            crop_margin=request.crop_margin,
+            contrast=request.contrast,
+            auto_wb=request.auto_wb
         )
         
         # Modify returned paths to be URLs

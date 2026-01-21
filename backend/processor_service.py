@@ -9,7 +9,7 @@ class ProcessorService:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10) -> List[str]:
+    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_wb: bool = False) -> List[str]:
         """
         Detects multiple photos in a single scanned page and crops them.
         Uses HSV saturation thresholding to isolate color prints from white backgrounds.
@@ -18,6 +18,8 @@ class ProcessorService:
             output_subfolder: Optional subfolder name within output_dir to save photos.
             sensitivity: Value channel threshold (lower = more sensitive to darks, higher = ignores more background). Default 210.
             crop_margin: Number of pixels to crop from each edge of the detected photo. Default 10.
+            contrast: Contrast multiplier (1.0 = normal).
+            auto_wb: Whether to apply automatic white balance (Gray World).
         """
         image = cv2.imread(image_path)
         if image is None:
@@ -104,6 +106,9 @@ class ProcessorService:
             try:
                 # Extract and straighten
                 cropped = self._get_warped_crop_from_rect(image, rect, crop_margin=crop_margin)
+                
+                # Apply enhancements
+                cropped = self.apply_corrections(cropped, contrast=contrast, auto_wb=auto_wb)
                 
                 output_name = f"{img_base_name}_photo_{len(cropped_images_paths)}.png"
                 output_path = os.path.join(current_output_dir, output_name)
@@ -217,6 +222,31 @@ class ProcessorService:
             warped = warped[crop_margin:-crop_margin, crop_margin:-crop_margin]
 
         return warped
+
+    def apply_corrections(self, image: np.ndarray, contrast: float = 1.0, brightness: int = 0, auto_wb: bool = False) -> np.ndarray:
+        """
+        Applies image corrections (Contrast/Brightness, White Balance)
+        contrast: 1.0 is neutral, >1.0 increases contrast.
+        brightness: 0 is neutral, +/- adds to pixel values.
+        auto_wb: Simple Gray World assumption white balance.
+        """
+        out = image.copy()
+        
+        # 1. White Balance (Simple "Gray World")
+        if auto_wb:
+            result = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+            avg_a = np.average(result[:, :, 1])
+            avg_b = np.average(result[:, :, 2])
+            result[:, :, 1] = result[:, :, 1] - ((avg_a - 128) * (result[:, :, 0] / 255.0) * 1.1)
+            result[:, :, 2] = result[:, :, 2] - ((avg_b - 128) * (result[:, :, 0] / 255.0) * 1.1)
+            out = cv2.cvtColor(result, cv2.COLOR_LAB2BGR)
+
+        # 2. Contrast & Brightness
+        # cv2.convertScaleAbs(image, alpha=contrast, beta=brightness)
+        if contrast != 1.0 or brightness != 0:
+            out = cv2.convertScaleAbs(out, alpha=contrast, beta=brightness)
+            
+        return out
 
     def rotate_photo(self, image_path: str, angle: float) -> str:
         """
