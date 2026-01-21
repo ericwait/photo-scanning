@@ -18,11 +18,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Constants
-SCAN_DIR = "scans"
-OUTPUT_DIR = "output"
-
 # Services
+# Define base directory relative to this file to handle being run from different locations
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCAN_DIR = os.path.join(BASE_DIR, "scans")
+OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+
 scanner = ScannerService(SCAN_DIR)
 processor = ProcessorService(OUTPUT_DIR)
 
@@ -52,7 +53,9 @@ async def trigger_scan(request: ScanRequest):
         if request.mock:
             if not request.mock_source:
                 raise HTTPException(status_code=400, detail="Mock source path required for mock scan")
-            scan_path = scanner.mock_scan(filename, request.mock_source)
+            # Resolve mock source relative to project root (BASE_DIR)
+            mock_source_path = os.path.join(BASE_DIR, request.mock_source)
+            scan_path = scanner.mock_scan(filename, mock_source_path)
         else:
             scan_path = scanner.scan_page(filename)
         
