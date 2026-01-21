@@ -18,7 +18,7 @@ class ProcessorService:
         if image is None:
             raise ValueError(f"Could not read image at {image_path}")
 
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR_GRAY)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
         # Adaptive thresholding to handle potential brightness variations
         # Assuming photos are darker/different from the high-key scanner background/lid
