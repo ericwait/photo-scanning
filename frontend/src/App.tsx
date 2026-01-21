@@ -35,7 +35,7 @@ function App() {
       const response = await fetch(`${API_BASE}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mock: mock, mock_source: mock ? "test_image.jpg" : "" })
+        body: JSON.stringify({ mock: mock, mock_source: mock ? "test_scanner_bed.png" : "" })
       });
 
       if (!response.ok) {
