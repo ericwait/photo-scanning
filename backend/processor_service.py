@@ -51,7 +51,7 @@ class ProcessorService:
             # Get the rotated bounding box
             rect = cv2.minAreaRect(cnt)
             box = cv2.boxPoints(rect)
-            box = np.int0(box)
+            box = np.intp(box)
             
             # Straighten and crop
             cropped = self._get_rotated_crop(image, rect)
