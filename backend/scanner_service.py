@@ -33,13 +33,14 @@ class ScannerService:
             
             # Note: 65536 is "Maximize Quality" bias
             # FormatID for JPEG is {B96B3CAE-0728-11D3-9D7B-0000F81EF32E}
+            # FormatID for PNG is {B96B3CAF-0728-11D3-9D7B-0000F81EF32E}
             
             print("Requesting scan from WIA device...")
             image_file = wia_dialog.ShowAcquireImage(
                 1, # DeviceType: Scanner
                 1, # Intent: ColorIntent
                 65536, # Bias: Maximize Quality
-                "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}", # FormatID: JPEG
+                "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}", # FormatID: PNG
                 False, # AlwaysSelectDevice: False (use default if possible)
                 True, # UseCommonUI: True (shows progress bar, helpful)
                 False # CancelError: False

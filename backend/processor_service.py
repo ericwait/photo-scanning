@@ -18,18 +18,25 @@ class ProcessorService:
         if image is None:
             raise ValueError(f"Could not read image at {image_path}")
 
-        # 1. Convert to HSV and extract Saturation channel
-        # Color photos have high saturation compared to white/gray backgrounds
+        # 1. Convert to HSV
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         s_channel = hsv[:,:,1]
+        v_channel = hsv[:,:,2]
         
-        # 2. Threshold Saturation
-        # A higher threshold ensures we pick up strong colors only, ignoring "off-white" paper
-        _, thresh = cv2.threshold(s_channel, 45, 255, cv2.THRESH_BINARY)
+        # 2. Create Masks
+        # Mask 1: Saturation (Color). Lowered to 30 to catch duller colors.
+        _, s_thresh = cv2.threshold(s_channel, 30, 255, cv2.THRESH_BINARY)
         
-        # 3. Morphological cleanup: Close small gaps but don't expand too much
+        # Mask 2: Value (Brightness). Catch dark items on white background.
+        # Scanner background is usually near 255. Photos are darker.
+        _, v_thresh = cv2.threshold(v_channel, 250, 255, cv2.THRESH_BINARY_INV)
+        
+        # Combine: It's a photo if it has color OR is dark
+        combined_mask = cv2.bitwise_or(s_thresh, v_thresh)
+        
+        # 3. Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-        morphed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        morphed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
         dilated = cv2.dilate(morphed, kernel, iterations=1)
 
         # 4. Find all contours
@@ -58,27 +65,49 @@ class ProcessorService:
         cropped_images_paths = []
         img_base_name = os.path.basename(image_path).split('.')[0]
         
+        # Process found candidates
         for idx, cnt in enumerate(photo_candidates):
+            # Limit to top 3 largest/most relevant if we have too many? 
+            # Logic: If we found > 3, we might need better logic, but usually it's noise.
+            # For now, let's take up to 3.
+            if len(cropped_images_paths) >= 3:
+                break
+
             # Use convex hull to smooth out detections and get a more stable box
             hull = cv2.convexHull(cnt)
             rect = cv2.minAreaRect(hull)
             
             # Slightly shrink the box to ensure we don't pick up white margins
-            # Shrink by 1% of dimensions or 5 pixels
             (center, size, angle) = rect
             size = (size[0] * 0.98, size[1] * 0.98) # Shrink 2%
             rect = (center, size, angle)
             
             try:
-                # Extract and straighten
                 cropped = self._get_warped_crop_from_rect(image, rect)
-                
-                output_name = f"{img_base_name}_photo_{idx}.jpg"
+                output_name = f"{img_base_name}_photo_{len(cropped_images_paths)}.jpg"
                 output_path = os.path.join(self.output_dir, output_name)
                 cv2.imwrite(output_path, cropped)
                 cropped_images_paths.append(output_path)
             except Exception as e:
-                print(f"Failed to process photo {idx}: {e}")
+                print(f"Failed to process photo candidate {idx}: {e}")
+                
+        # Fallback: Ensure we always return at least 3 items (or slots)
+        # If we missed one, create a placeholder so the user can manually refine it
+        while len(cropped_images_paths) < 3:
+            idx = len(cropped_images_paths)
+            placeholder = np.zeros((400, 600, 3), dtype=np.uint8)
+            placeholder[:] = (30, 30, 30) # Dark gray background
+            
+            # Add text
+            text = "Photo Not Detected"
+            cv2.putText(placeholder, text, (150, 180), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 200, 200), 2)
+            text2 = "Click 'Refine Crop' to set manually"
+            cv2.putText(placeholder, text2, (80, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1)
+            
+            output_name = f"{img_base_name}_photo_{idx}.jpg"
+            output_path = os.path.join(self.output_dir, output_name)
+            cv2.imwrite(output_path, placeholder)
+            cropped_images_paths.append(output_path)
             
         return cropped_images_paths
 
@@ -96,11 +125,11 @@ class ProcessorService:
         try:
             cropped = self._get_warped_crop_from_rect(image, pts)
             
-            img_base_name = os.path.basename(image_path).split('.')[0]
-            output_name = f"{img_base_name}_photo_{photo_index}.jpg"
+            img_base_name = os.path.splitext(os.path.basename(image_path))[0]
+            output_name = f"{img_base_name}_photo_{photo_index}.png"
             output_path = os.path.join(self.output_dir, output_name)
             
-            cv2.imwrite(output_path, cropped)
+            cv2.imwrite(output_path, cropped, [cv2.IMWRITE_PNG_COMPRESSION, 3])
             return output_path
         except Exception as e:
             print(f"Manual crop failed: {e}")
@@ -151,7 +180,7 @@ class ProcessorService:
     def rotate_photo(self, image_url: str, angle: float) -> str:
         """
         Rotates an existing photo by the specified angle (90 or -90 typically).
-        image_url is the relative path (e.g. /output/filename.jpg).
+        image_url is the relative path (e.g. /output/filename.png).
         """
         # Convert relative URL to absolute file path
         filename = os.path.basename(image_url)
@@ -169,7 +198,7 @@ class ProcessorService:
             # Arbitrary rotation not implemented for simple buttons yet, use existing
             raise ValueError("Only 90 and -90 supported efficiently")
             
-        cv2.imwrite(filepath, rotated)
+        cv2.imwrite(filepath, rotated, [cv2.IMWRITE_PNG_COMPRESSION, 3])
         return filepath
 
 if __name__ == "__main__":
