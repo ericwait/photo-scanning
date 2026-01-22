@@ -311,48 +311,41 @@ class ProcessorService:
                 # In float LAB, L is 0..100? or 0..1? 
                 # OpenCV docs: BGR (float) -> Lab. L is 0..100, a,b are roughly -127..127
                 # Let's check min/max
-                p_low = float(np.min(l))
-                p_high = float(np.max(l))
+                # Calculate robust bounds using histogram statistics (CDF)
+                # Use 0.05% and 99.95% to avoid clipping details while removing salt/pepper noise
+                p_low, p_high = self._get_histogram_bounds(l, 0.05, 99.95)
                 
-                if p_high <= p_low:
-                    # Flat image
-                    pass
-                else:
-                    # Stretch L channel (histogram normalization)
-                    # We want to stretch to roughly 0..100 range? 
-                    # Existing range is p_low to p_high.
-                    # Target is 0 to 100?
+                if p_high > p_low + 1.0: # Ensure reasonable range
+                    # Stretch L channel
+                    # Target is 0 to 100
                     scale = 100.0 / (p_high - p_low)
                     l = cv2.subtract(l, p_low)
                     l = cv2.multiply(l, scale)
-                    # Clip L to 0..100
                     l = np.clip(l, 0, 100)
                 
                 lab = cv2.merge([l, a, b])
                 working_img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
                 
                 # Convert back to 16-bit
-                # 0..1 -> 0..65535
                 out = (working_img * 65535.0).clip(0, 65535).astype(np.uint16)
                 
             else:
-                # 8-bit path (legacy/simple)
+                # 8-bit path
                 lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
                 l, a, b = cv2.split(lab)
-                p_low = float(np.min(l))
-                p_high = float(np.max(l))
-                if p_high > p_low:
-                     scale = 255.0 / (p_high - p_low)
-                     l = cv2.subtract(l, p_low)
-                     l = cv2.multiply(l, scale) # saturate is implicit if we used cv2 math? No.
-                     # cv2.multiply result type depends on inputs.
-                     # convertScaleAbs handles it.
-                     l = cv2.convertScaleAbs(l, alpha=(255.0/(p_high-p_low)), beta=-(p_low*255.0/(p_high-p_low)))
-                     # Simplify: create LUT or manual stretch
-                     # Re-use logic:
-                     # This block was simpler before. I'll revert to similar logic but safe for 8-bit.
-                     l = cv2.normalize(l, None, 0, 255, cv2.NORM_MINMAX)
+                
+                # Calculate bounds on 0-255 scale
+                p_low, p_high = self._get_histogram_bounds(l, 0.05, 99.95, range_max=255)
+
+                if p_high > p_low + 1.0:
+                    # Use float32 for precise stretching
+                    l_float = l.astype(np.float32)
+                    scale = 255.0 / (p_high - p_low)
+                    l_float = (l_float - p_low) * scale
+                    l = np.clip(l_float, 0, 255).astype(np.uint8)
                      
+                lab = cv2.merge([l, a, b])
+                out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
                 lab = cv2.merge([l, a, b])
                 out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
@@ -361,8 +354,6 @@ class ProcessorService:
             if is_16bit:
                 # convertScaleAbs is 8-bit output only. We must do math manually or use addWeighted.
                 # out = alpha * out + beta
-                out = cv2.convertScaleAbs(out, alpha=contrast, beta=brightness)
-                # WAIT! convertScaleAbs returns 8-bit! We CANNOT use it for 16-bit.
                 # We must use cv2.addWeighted or simple multiplication
                 
                 # out = out * contrast + brightness
@@ -376,6 +367,40 @@ class ProcessorService:
                 out = cv2.convertScaleAbs(out, alpha=contrast, beta=brightness)
             
         return out
+
+    def _get_histogram_bounds(self, data: np.ndarray, min_percent: float, max_percent: float, range_max: float = 100.0) -> Tuple[float, float]:
+        """
+        Calculates robust min/max values from histogram to preserve detail.
+        min_percent: Percentile for black point (e.g. 0.05)
+        max_percent: Percentile for white point (e.g. 99.95)
+        range_max: The maximum value of the data domain (100 for Float L, 255 for 8-bit)
+        """
+        # Ensure flat array
+        flat = data.ravel()
+        
+        # Determine strict float bounds to ensure we handle the type correctly
+        # We use a localized histogram for speed and robustness vs sorting
+        nbins = 1000 # Enough precision (0.1% of range)
+        hist, bin_edges = np.histogram(flat, bins=nbins, range=(0, range_max))
+        
+        cdf = hist.cumsum()
+        total_pixels = cdf[-1]
+        
+        # Find indices
+        low_thresh = total_pixels * (min_percent / 100.0)
+        high_thresh = total_pixels * (max_percent / 100.0)
+        
+        # searchsorted returns the index where the value would be inserted
+        idx_low = np.searchsorted(cdf, low_thresh)
+        idx_high = np.searchsorted(cdf, high_thresh)
+        
+        # Clamp indices
+        idx_low = min(max(idx_low, 0), nbins - 1)
+        idx_high = min(max(idx_high, 0), nbins - 1)
+        
+        return float(bin_edges[idx_low]), float(bin_edges[idx_high])
+
+
 
     def rotate_photo(self, image_path: str, angle: float) -> str:
         """
