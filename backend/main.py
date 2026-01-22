@@ -108,7 +108,7 @@ async def trigger_scan(request: ScanRequest):
                 scan_url_path = f"/scans/{preview_filename}"
 
         # Process the scan immediately
-        cropped_paths = processor.detect_and_crop(
+        results = processor.detect_and_crop(
             scan_path, 
             output_subfolder=request.album_name,
             sensitivity=request.sensitivity,
@@ -119,8 +119,11 @@ async def trigger_scan(request: ScanRequest):
         )
         
         # Modify returned paths to be URLs
-        processed_urls = []
-        for p in cropped_paths:
+        processed_photos = []
+        for item in results:
+            p = item["path"]
+            points = item["points"]
+            
             # If subfolder is used, p is absolute path. We need relative URL.
             # Assuming OUTPUT_DIR is the root served at /output
             
@@ -132,19 +135,22 @@ async def trigger_scan(request: ScanRequest):
             except:
                 pass # Different drives or paths
 
+            url_path = ""
             if rel_path:
                  # Ensure forward slashes for URL
                  url_path = f"/output/{rel_path}".replace("\\", "/")
-                 processed_urls.append(url_path)
             else:
                  # Absolute path outside of project structure
                  url_path = f"/images?path={p}"
-                 processed_urls.append(url_path)
-    
+            
+            processed_photos.append({
+                "url": url_path,
+                "points": points
+            })
         return {
             "status": "success",
             "scan_path": scan_url_path,
-            "photos": processed_urls
+            "photos": processed_photos
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -240,23 +246,40 @@ async def rotate_photo(request: RotateRequest):
         if p.startswith("/output/"):
             # Relative to output dir. 
             # p might be /output/subfolder/file.png OR /output/file.png
+            
+            # Strip query params
+            clean_p = p
+            if "?" in clean_p:
+                clean_p = clean_p.split("?")[0]
+            
             # Strip /output/
-            rel = p[len("/output/"):]
+            rel = clean_p[len("/output/"):]
             abs_path = os.path.join(OUTPUT_DIR, rel)
         elif "/images?path=" in p:
              # Extract path param
-             # Simple string split? "path="
-             abs_path = p.split("path=")[1]
-             # If url encoded? Frontend might send raw.
-             # Assuming standard string for now.
+             # p is like /images?path=C:\Users\foo.png&t=1234
+             temp = p.split("path=")[1]
+             # Strip additional query params if any
+             if "&" in temp:
+                 temp = temp.split("&")[0]
+             abs_path = temp
         else:
              # Fallback, maybe it's just a filename?
+             # Clean p of query params just in case
+             if "?" in p:
+                 p = p.split("?")[0]
              abs_path = os.path.join(OUTPUT_DIR, os.path.basename(p))
 
         processor.rotate_photo(abs_path, request.angle)
+        
+        # Return the URL with a fresh timestamp so the UI updates
+        clean_url = request.photo_url.split('?')[0].split('&')[0]
+        import time
+        new_url = f"{clean_url}?t={int(time.time())}"
+        
         return {
             "status": "success",
-            "photo_url": request.photo_url
+            "photo_url": new_url
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -9,18 +9,12 @@ class ProcessorService:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False) -> List[str]:
+
+
+    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False) -> List[dict]:
         """
         Detects multiple photos in a single scanned page and crops them.
-        Uses HSV saturation thresholding to isolate color prints from white backgrounds.
-        Args:
-            image_path: Path to the scanned image.
-            output_subfolder: Optional subfolder name within output_dir to save photos.
-            sensitivity: Value channel threshold (lower = more sensitive to darks, higher = ignores more background). Default 210.
-            crop_margin: Number of pixels to crop from each edge of the detected photo. Default 10.
-            contrast: Contrast multiplier (1.0 = normal).
-            auto_contrast: Whether to apply histogram clipping (2%/1%).
-            auto_wb: Whether to apply automatic white balance (Gray World).
+        Returns: List of dicts { "path": str, "points": List[List[int]] }
         """
         # Load with ANYDEPTH to support 16-bit (uint16)
         image = cv2.imread(image_path, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_COLOR)
@@ -102,7 +96,7 @@ class ProcessorService:
             
         photo_candidates.sort(key=get_center_y)
         
-        cropped_images_paths = []
+        results = []
         img_base_name = os.path.basename(image_path).split('.')[0]
         
         # Process found candidates
@@ -110,7 +104,7 @@ class ProcessorService:
             # Limit to top 3 largest/most relevant if we have too many? 
             # Logic: If we found > 3, we might need better logic, but usually it's noise.
             # For now, let's take up to 3.
-            if len(cropped_images_paths) >= 3:
+            if len(results) >= 3:
                 break
 
             # Use convex hull to smooth out detections and get a more stable box
@@ -122,8 +116,14 @@ class ProcessorService:
             size = (size[0] * 0.98, size[1] * 0.98) # Shrink 2%
             rect = (center, size, angle)
             
+            # Convert rect to points for returning
+            box = cv2.boxPoints(rect)
+            box_points = np.array(box, dtype="int").tolist()
+
             try:
                 # Extract and straighten from original (possibly 16-bit) image
+                # Note: We pass the rect tuple to _get_warped... which converts to points internally
+                # But we also have box_points now.
                 cropped = self._get_warped_crop_from_rect(image, rect, crop_margin=crop_margin)
                 
                 # Apply enhancements
@@ -134,18 +134,22 @@ class ProcessorService:
                     # Simple scaling: divide by 256
                     cropped = (cropped / 256.0).astype(np.uint8)
                 
-                output_name = f"{img_base_name}_photo_{len(cropped_images_paths)}.png"
+                output_name = f"{img_base_name}_photo_{len(results)}.png"
                 output_path = os.path.join(current_output_dir, output_name)
                 # PNG compression: 0-9. 3 is a good balance.
                 cv2.imwrite(output_path, cropped, [cv2.IMWRITE_PNG_COMPRESSION, 3])
-                cropped_images_paths.append(output_path)
+                
+                results.append({
+                    "path": output_path,
+                    "points": box_points
+                })
             except Exception as e:
                 print(f"Failed to process photo candidate {idx}: {e}")
                 
         # Fallback: Ensure we always return at least 3 items (or slots)
         # If we missed one, create a placeholder so the user can manually refine it
-        while len(cropped_images_paths) < 3:
-            idx = len(cropped_images_paths)
+        while len(results) < 3:
+            idx = len(results)
             placeholder = np.zeros((400, 600, 3), dtype=np.uint8)
             placeholder[:] = (30, 30, 30) # Dark gray background
             
@@ -158,9 +162,14 @@ class ProcessorService:
             output_name = f"{img_base_name}_photo_{idx}.png"
             output_path = os.path.join(current_output_dir, output_name)
             cv2.imwrite(output_path, placeholder)
-            cropped_images_paths.append(output_path)
             
-        return cropped_images_paths
+            # Placeholder has no valid points really, but we can provide dummy or empty
+            results.append({
+                "path": output_path,
+                "points": [] 
+            })
+            
+        return results
 
     def manual_crop(self, image_path: str, points: List[List[int]], photo_index: int, output_subfolder: str = None, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False) -> str:
         """

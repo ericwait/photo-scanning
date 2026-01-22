@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { RefineModal } from './RefineModal';
 
+import { PhotoCard, type PhotoData } from './PhotoCard';
+
 interface ScanResult {
   status: string;
   scan_path: string;
-  photos: string[];
+  photos: PhotoData[];
 }
 
 function App() {
@@ -28,6 +30,7 @@ function App() {
   const [autoContrast, setAutoContrast] = useState(() => localStorage.getItem('autoContrast') === 'true');
   const [autoWb, setAutoWb] = useState(() => localStorage.getItem('autoWb') === 'true');
   const [dpi, setDpi] = useState(() => Number(localStorage.getItem('dpi')) || 400);
+  const [use48Bit, setUse48Bit] = useState(() => localStorage.getItem('use48Bit') === 'true');
   const [showSettings, setShowSettings] = useState(() => localStorage.getItem('showSettings') === 'true');
 
   // Persist settings changes
@@ -38,6 +41,7 @@ function App() {
   useEffect(() => { localStorage.setItem('autoContrast', String(autoContrast)); }, [autoContrast]);
   useEffect(() => { localStorage.setItem('autoWb', String(autoWb)); }, [autoWb]);
   useEffect(() => { localStorage.setItem('dpi', String(dpi)); }, [dpi]);
+  useEffect(() => { localStorage.setItem('use48Bit', String(use48Bit)); }, [use48Bit]);
   useEffect(() => { localStorage.setItem('showSettings', String(showSettings)); }, [showSettings]);
 
   const API_BASE = "http://localhost:8000";
@@ -61,7 +65,8 @@ function App() {
           contrast: contrast,
           auto_contrast: autoContrast,
           auto_wb: autoWb,
-          dpi: dpi
+          dpi: dpi,
+          bit_depth: use48Bit ? 48 : 24
         })
       });
 
@@ -84,8 +89,8 @@ function App() {
     setIsRefineOpen(true);
   };
 
-  const handleRefineSave = async (points: number[][], settings?: { contrast: number; autoContrast: boolean; autoWb: boolean }) => {
-    if (!currentScan || refinePhotoIndex === -1) return;
+  const handleRefineSaveInternal = async (index: number, points: number[][], settings?: { contrast: number; autoContrast: boolean; autoWb: boolean }) => {
+    if (!currentScan) return;
 
     // Use passed settings or fallback to global state
     const useContrast = settings ? settings.contrast : contrast;
@@ -98,7 +103,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scan_path: currentScan.scan_path,
-          photo_index: refinePhotoIndex,
+          photo_index: index,
           points: points,
           album_name: albumName,
           contrast: useContrast,
@@ -118,23 +123,31 @@ function App() {
       const newPhotoUrl = `${data.photo_url}${separator}t=${Date.now()}`;
 
       const updatedPhotos = [...currentScan.photos];
-      updatedPhotos[refinePhotoIndex] = newPhotoUrl;
+      // Keep existing points, update URL
+      updatedPhotos[index] = { ...updatedPhotos[index], url: newPhotoUrl };
 
       setCurrentScan({
         ...currentScan,
         photos: updatedPhotos
       });
 
-      setIsRefineOpen(false);
+      // Close modal if open and matching index
+      if (isRefineOpen && refinePhotoIndex === index) {
+        setIsRefineOpen(false);
+      }
 
     } catch (err: any) {
       alert(`Error refining photo: ${err.message}`);
     }
   };
 
+  const handleRefineSave = async (points: number[][], settings?: { contrast: number; autoContrast: boolean; autoWb: boolean }) => {
+    await handleRefineSaveInternal(refinePhotoIndex, points, settings);
+  };
+
   const handleRotate = async (index: number, angle: number) => {
     if (!currentScan) return;
-    const photoUrl = currentScan.photos[index];
+    const photoUrl = currentScan.photos[index].url;
 
     // Remove timestamp param (either ?t=... or &t=...) to get clean ID
     const cleanUrl = photoUrl.replace(/([?&])t=\d+$/, '');
@@ -155,7 +168,7 @@ function App() {
       const separator = cleanUrl.includes('?') ? '&' : '?';
       const newPhotoUrl = `${cleanUrl}${separator}t=${Date.now()}`;
       const updatedPhotos = [...currentScan.photos];
-      updatedPhotos[index] = newPhotoUrl;
+      updatedPhotos[index] = { ...updatedPhotos[index], url: newPhotoUrl };
 
       setCurrentScan({
         ...currentScan,
@@ -347,16 +360,36 @@ function App() {
                   </div>
                 </label>
               </div>
+
+              <div>
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className={`w-6 h-6 rounded border flex items-center justify-center transition-colors ${use48Bit ? 'bg-yellow-600 border-yellow-600' : 'bg-slate-900 border-slate-700'}`}>
+                    {use48Bit && <span className="text-white text-sm">✓</span>}
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="hidden"
+                    checked={use48Bit}
+                    onChange={(e) => setUse48Bit(e.target.checked)}
+                  />
+                  <div>
+                    <span className="block text-sm font-medium text-slate-300 group-hover:text-white transition-colors">High Quality Scan (48-bit)</span>
+                    <p className="text-xs text-slate-500 mt-1">Slower. Uses 16-bits per color for smoother gradients.</p>
+                  </div>
+                </label>
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {error && (
-        <div className="bg-red-500/10 border border-red-500/50 text-red-400 p-4 rounded-xl mb-8">
-          Error: {error}
-        </div>
-      )}
+      {
+        error && (
+          <div className="bg-red-500/10 border border-red-500/50 text-red-400 p-4 rounded-xl mb-8">
+            Error: {error}
+          </div>
+        )
+      }
 
       <main className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-7xl mx-auto">
         {/* Left: Previous Scan Preview */}
@@ -394,44 +427,34 @@ function App() {
             </h2>
             <div className="space-y-8">
               {currentScan?.photos.map((photo, idx) => (
-                <div key={idx} className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-lg">
-                  {/* Remove fixed height and object-cover to show full image */}
-                  <div className="p-4 flex justify-center bg-black/20">
-                    <img
-                      src={photo.startsWith("http") ? photo : `${API_BASE}${photo}`}
-                      alt={`Photo ${idx}`}
-                      className="max-w-full h-auto shadow-md"
-                    />
-                  </div>
+                <PhotoCard
+                  key={idx}
+                  index={idx}
+                  photo={photo}
+                  onRotate={handleRotate}
+                  onRefineOpen={openRefine}
+                  onUpdateSettings={(idx, photo, settings) => {
+                    // Update the state so the API call uses the correct index (refinePhotoIndex needs to be set possibly, OR we pass index directly)
+                    // handleRefineSave uses refinePhotoIndex state. We should probably update it or refactor handleRefineSave to take index.
+                    // Let's refactor handleRefineSave to accept index.
+                    // Wait, I cannot refactor definitions easily in multi_replace chunks if they are far apart.
+                    // I will set state then call. But state setting is async.
+                    // Better to just call a specific function.
 
-                  <div className="p-4 flex justify-between items-center bg-slate-800 border-t border-slate-700">
-                    <span className="text-sm font-medium text-slate-400">Photo {idx + 1}</span>
-
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleRotate(idx, -90)}
-                        className="p-2 bg-slate-700 text-slate-300 rounded hover:bg-slate-600 hover:text-white transition-colors"
-                        title="Rotate Left"
-                      >
-                        ↺
-                      </button>
-                      <button
-                        onClick={() => handleRotate(idx, 90)}
-                        className="p-2 bg-slate-700 text-slate-300 rounded hover:bg-slate-600 hover:text-white transition-colors"
-                        title="Rotate Right"
-                      >
-                        ↻
-                      </button>
-                      <div className="w-px h-6 bg-slate-600 mx-2 self-center"></div>
-                      <button
-                        onClick={() => openRefine(idx)}
-                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-500 transition-colors text-sm font-semibold"
-                      >
-                        Refine Crop
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                    // Actually, handleRefineSave depends on `refinePhotoIndex`.
+                    // I should modify handleRefineSave to accept an optional index argument.
+                    setRefinePhotoIndex(idx); // This might not update in time for the current function execution?
+                    // Actually, we can just copy the logic or modify handleRefineSave.
+                    // Let's modify handleRefineSave to take explicit index.
+                    handleRefineSaveInternal(idx, photo.points, settings);
+                  }}
+                  globalSettings={{
+                    contrast,
+                    autoContrast,
+                    autoWb
+                  }}
+                  scanId={currentScan.scan_path}
+                />
               ))}
               {!currentScan && (
                 <p className="text-slate-500 italic text-center py-8">Photos will appear here after scanning</p>
@@ -440,7 +463,7 @@ function App() {
           </div>
         </div>
       </main>
-    </div>
+    </div >
   )
 }
 
