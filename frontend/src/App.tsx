@@ -320,7 +320,7 @@ function App() {
                   />
                   <div>
                     <span className="block text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Auto Contrast</span>
-                    <p className="text-xs text-slate-500 mt-1">Intelligent histogram clipping (2% Low, 1% High).</p>
+                    <p className="text-xs text-slate-500 mt-1">Stretch min/max values to full range.</p>
                   </div>
                 </label>
               </div>

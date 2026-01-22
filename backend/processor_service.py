@@ -259,20 +259,20 @@ class ProcessorService:
             
             out = cv2.merge([b, g, r])
 
-        # 2. Auto Contrast (Histogram Clipping: 2% low, 1% high)
+        # 2. Auto Contrast (Min-Max Stretching)
         if auto_contrast:
             # Convert to LAB for luminance processing to avoid color shifts
             lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
             
-            # Calculate percentiles on Luminance channel
-            p_low = np.percentile(l, 2)
-            p_high = np.percentile(l, 99)
+            # Calculate min/max on Luminance channel
+            p_low = float(np.min(l))
+            p_high = float(np.max(l))
             
             # Avoid division by zero
             if p_high <= p_low:
-                p_high = 255
-                p_low = 0
+                p_high = 255.0
+                p_low = 0.0
                 
             # Stretch histogram
             # New_L = (L - p_low) * (255 / (p_high - p_low))
