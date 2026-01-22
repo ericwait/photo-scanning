@@ -45,6 +45,7 @@ class ScanRequest(BaseModel):
     contrast: float = 1.0
     auto_contrast: bool = False
     auto_wb: bool = False
+    dpi: int = 400
 
 @app.get("/health")
 def health_check():
@@ -69,7 +70,7 @@ async def trigger_scan(request: ScanRequest):
             mock_source_path = os.path.join(BASE_DIR, request.mock_source)
             scan_path = scanner.mock_scan(filename, mock_source_path)
         else:
-            scan_path = scanner.scan_page(filename)
+            scan_path = scanner.scan_page(filename, dpi=request.dpi)
         
         # Process the scan immediately
         cropped_paths = processor.detect_and_crop(

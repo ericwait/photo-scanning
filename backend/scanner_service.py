@@ -8,7 +8,7 @@ class ScannerService:
         if not os.path.exists(scan_dir):
             os.makedirs(scan_dir)
 
-    def scan_page(self, filename: str) -> str:
+    def scan_page(self, filename: str, dpi: int = 400) -> str:
         """
         Triggers a scan from the default scanner using Windows Image Acquisition (WIA) automation.
         Bypasses the "Select Device" and "Scan Properties" UI prompts by connecting directly.
@@ -51,14 +51,14 @@ class ScannerService:
                         prop.Value = 1 # Color
                         break
                 
-                # Set DPI to 400
+                # Set DPI
                 for prop in item.Properties:
                     if prop.PropertyID == 6147: # Horizontal Res
-                        prop.Value = 400
+                        prop.Value = dpi
                     elif prop.PropertyID == 6148: # Vertical Res
-                        prop.Value = 400
+                        prop.Value = dpi
                         
-                print("Scanner configured: Color, 400 DPI")
+                print(f"Scanner configured: Color, {dpi} DPI")
             except Exception as e:
                 print(f"Warning: Could not set scanner properties: {e}")
 

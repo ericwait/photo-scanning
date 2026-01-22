@@ -27,6 +27,7 @@ function App() {
   });
   const [autoContrast, setAutoContrast] = useState(() => localStorage.getItem('autoContrast') === 'true');
   const [autoWb, setAutoWb] = useState(() => localStorage.getItem('autoWb') === 'true');
+  const [dpi, setDpi] = useState(() => Number(localStorage.getItem('dpi')) || 400);
   const [showSettings, setShowSettings] = useState(() => localStorage.getItem('showSettings') === 'true');
 
   // Persist settings changes
@@ -36,6 +37,7 @@ function App() {
   useEffect(() => { localStorage.setItem('contrast', String(contrast)); }, [contrast]);
   useEffect(() => { localStorage.setItem('autoContrast', String(autoContrast)); }, [autoContrast]);
   useEffect(() => { localStorage.setItem('autoWb', String(autoWb)); }, [autoWb]);
+  useEffect(() => { localStorage.setItem('dpi', String(dpi)); }, [dpi]);
   useEffect(() => { localStorage.setItem('showSettings', String(showSettings)); }, [showSettings]);
 
   const API_BASE = "http://localhost:8000";
@@ -58,7 +60,8 @@ function App() {
           crop_margin: cropMargin,
           contrast: contrast,
           auto_contrast: autoContrast,
-          auto_wb: autoWb
+          auto_wb: autoWb,
+          dpi: dpi
         })
       });
 
@@ -285,6 +288,26 @@ function App() {
                 className="w-full accent-purple-500 h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer"
               />
               <p className="text-xs text-slate-500 mt-1">Increase to make faded colors pop.</p>
+            </div>
+
+            {/* DPI Settings */}
+            <div>
+              <div className="flex justify-between mb-2">
+                <label className="text-sm font-medium text-slate-400">
+                  Scan Resolution (DPI)
+                </label>
+                <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded">{dpi} DPI</span>
+              </div>
+              <input
+                type="range"
+                min="150"
+                max="1200"
+                step="50"
+                value={dpi}
+                onChange={(e) => setDpi(Number(e.target.value))}
+                className="w-full accent-pink-500 h-2 bg-slate-900 rounded-lg appearance-none cursor-pointer"
+              />
+              <p className="text-xs text-slate-500 mt-1">Higher = more detail but slower. 300-600 is standard.</p>
             </div>
 
             {/* Auto White Balance & Contrast */}
