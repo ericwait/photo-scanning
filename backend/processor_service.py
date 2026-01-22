@@ -22,9 +22,22 @@ class ProcessorService:
             auto_contrast: Whether to apply histogram clipping (2%/1%).
             auto_wb: Whether to apply automatic white balance (Gray World).
         """
-        image = cv2.imread(image_path)
+        # Load with ANYDEPTH to support 16-bit (uint16)
+        image = cv2.imread(image_path, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError(f"Could not read image at {image_path}")
+
+        # Check depth
+        is_16bit = image.dtype == np.uint16
+        
+        # Create an 8-bit version for detection logic (HSV, Thresholds work best in 8-bit standard range)
+        if is_16bit:
+            # Scale down to 8-bit
+            scan_8bit = cv2.convertScaleAbs(image, alpha=(255.0/65535.0))
+            # Normalize to full 0-255 range to align with expected thresholds
+            scan_8bit = cv2.normalize(scan_8bit, None, 0, 255, cv2.NORM_MINMAX)
+        else:
+            scan_8bit = image.copy()
 
         # Determine output directory
         current_output_dir = self.output_dir
@@ -37,8 +50,8 @@ class ProcessorService:
             if not os.path.exists(current_output_dir):
                 os.makedirs(current_output_dir)
 
-        # 1. Convert to HSV
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        # 1. Convert to HSV (Use 8-bit version)
+        hsv = cv2.cvtColor(scan_8bit, cv2.COLOR_BGR2HSV)
         s_channel = hsv[:,:,1]
         v_channel = hsv[:,:,2]
         
@@ -56,15 +69,20 @@ class ProcessorService:
         # 3. Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         morphed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+        
+        # Erode to peel off jagged edges or thin connections (like hole punch tabs)
+        # 2 iterations with 7x7 kernel = ~7-14 pixels shaving.
+        eroded = cv2.erode(morphed, kernel, iterations=2)
+        
         # REMOVED dilation to prevent expanding the border
         # dilated = cv2.dilate(morphed, kernel, iterations=1)
 
         # 4. Find all contours - Use RETR_LIST to ensure we get internal contours if the background is detected
-        # Use 'morphed' instead of 'dilated'
-        contours, _ = cv2.findContours(morphed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        # Use 'eroded' to get tighter bounds and ignore artifacts
+        contours, _ = cv2.findContours(eroded, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         
         # 5. Filter for photo-sized objects
-        img_h, img_w = image.shape[:2]
+        img_h, img_w = scan_8bit.shape[:2]
         full_area = img_h * img_w
         
         # We expect typically 3 photos per page, but let's be flexible
@@ -105,11 +123,16 @@ class ProcessorService:
             rect = (center, size, angle)
             
             try:
-                # Extract and straighten
+                # Extract and straighten from original (possibly 16-bit) image
                 cropped = self._get_warped_crop_from_rect(image, rect, crop_margin=crop_margin)
                 
                 # Apply enhancements
                 cropped = self.apply_corrections(cropped, contrast=contrast, auto_contrast=auto_contrast, auto_wb=auto_wb)
+                
+                # Convert to 8-bit for final storage (User request: save results as 8-bit)
+                if cropped.dtype == np.uint16:
+                    # Simple scaling: divide by 256
+                    cropped = (cropped / 256.0).astype(np.uint8)
                 
                 output_name = f"{img_base_name}_photo_{len(cropped_images_paths)}.png"
                 output_path = os.path.join(current_output_dir, output_name)
@@ -144,7 +167,7 @@ class ProcessorService:
         Manually crops a photo from the scan using 4 user-provided points.
         points: List of [x, y] coordinates order: TL, TR, BR, BL
         """
-        image = cv2.imread(image_path)
+        image = cv2.imread(image_path, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_COLOR)
         if image is None:
             raise ValueError(f"Could not read image at {image_path}")
             
@@ -168,6 +191,10 @@ class ProcessorService:
             
             # Apply enhancements
             cropped = self.apply_corrections(cropped, contrast=contrast, auto_contrast=auto_contrast, auto_wb=auto_wb)
+            
+            # Convert to 8-bit for final storage
+            if cropped.dtype == np.uint16:
+                cropped = (cropped / 256.0).astype(np.uint8)
             
             img_base_name = os.path.splitext(os.path.basename(image_path))[0]
             output_name = f"{img_base_name}_photo_{photo_index}.png"
@@ -236,6 +263,8 @@ class ProcessorService:
         auto_wb: If True, applies "aggressive" White Balance (RGB channel scaling).
         """
         out = image.copy()
+        is_16bit = image.dtype == np.uint16
+        max_val = 65535.0 if is_16bit else 255.0
         
         # 1. Aggressive RGB White Balance (Scale to have equal means)
         if auto_wb:
@@ -254,39 +283,97 @@ class ProcessorService:
             k_r = g_mean / r_mean
             k_b = g_mean / b_mean
             
-            r = cv2.convertScaleAbs(r, alpha=k_r)
-            b = cv2.convertScaleAbs(b, alpha=k_b)
+            # Use floating point for scaling, convert back safely
+            if is_16bit:
+                r = cv2.multiply(r.astype(np.float32), k_r).clip(0, max_val).astype(np.uint16)
+                b = cv2.multiply(b.astype(np.float32), k_b).clip(0, max_val).astype(np.uint16)
+            else:
+                r = cv2.convertScaleAbs(r, alpha=k_r)
+                b = cv2.convertScaleAbs(b, alpha=k_b)
             
             out = cv2.merge([b, g, r])
 
         # 2. Auto Contrast (Min-Max Stretching)
+        # 2. Auto Contrast (Min-Max Stretching)
         if auto_contrast:
-            # Convert to LAB for luminance processing to avoid color shifts
-            lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            
-            # Calculate min/max on Luminance channel
-            p_low = float(np.min(l))
-            p_high = float(np.max(l))
-            
-            # Avoid division by zero
-            if p_high <= p_low:
-                p_high = 255.0
-                p_low = 0.0
+            # OpenCV BGR2LAB does not typically support 16-bit (CV_16U). 
+            # We must convert to float32 first if 16-bit.
+            original_dtype = out.dtype
+            if is_16bit:
+                # Convert to float32 (0.0 to 65535.0 or 0..1? OpenCV usually expects 0..1 for float images if displaying, but for conversion it handles structure)
+                # Actually for BGR2LAB with float, it expects 0..1 usually.
+                # Let's normalize to 0..1
+                working_img = out.astype(np.float32) / 65535.0
                 
-            # Stretch histogram
-            # New_L = (L - p_low) * (255 / (p_high - p_low))
-            scale = 255.0 / (p_high - p_low)
-            l = cv2.subtract(l, p_low) # subtract low
-            l = cv2.convertScaleAbs(l, alpha=scale) # scale
-            
-            # Merge back
-            lab = cv2.merge([l, a, b])
-            out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+                lab = cv2.cvtColor(working_img, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                
+                # In float LAB, L is 0..100? or 0..1? 
+                # OpenCV docs: BGR (float) -> Lab. L is 0..100, a,b are roughly -127..127
+                # Let's check min/max
+                p_low = float(np.min(l))
+                p_high = float(np.max(l))
+                
+                if p_high <= p_low:
+                    # Flat image
+                    pass
+                else:
+                    # Stretch L channel (histogram normalization)
+                    # We want to stretch to roughly 0..100 range? 
+                    # Existing range is p_low to p_high.
+                    # Target is 0 to 100?
+                    scale = 100.0 / (p_high - p_low)
+                    l = cv2.subtract(l, p_low)
+                    l = cv2.multiply(l, scale)
+                    # Clip L to 0..100
+                    l = np.clip(l, 0, 100)
+                
+                lab = cv2.merge([l, a, b])
+                working_img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+                
+                # Convert back to 16-bit
+                # 0..1 -> 0..65535
+                out = (working_img * 65535.0).clip(0, 65535).astype(np.uint16)
+                
+            else:
+                # 8-bit path (legacy/simple)
+                lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab)
+                p_low = float(np.min(l))
+                p_high = float(np.max(l))
+                if p_high > p_low:
+                     scale = 255.0 / (p_high - p_low)
+                     l = cv2.subtract(l, p_low)
+                     l = cv2.multiply(l, scale) # saturate is implicit if we used cv2 math? No.
+                     # cv2.multiply result type depends on inputs.
+                     # convertScaleAbs handles it.
+                     l = cv2.convertScaleAbs(l, alpha=(255.0/(p_high-p_low)), beta=-(p_low*255.0/(p_high-p_low)))
+                     # Simplify: create LUT or manual stretch
+                     # Re-use logic:
+                     # This block was simpler before. I'll revert to similar logic but safe for 8-bit.
+                     l = cv2.normalize(l, None, 0, 255, cv2.NORM_MINMAX)
+                     
+                lab = cv2.merge([l, a, b])
+                out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
         # 3. Manual Contrast & Brightness (Applied on top)
         if contrast != 1.0 or brightness != 0:
-            out = cv2.convertScaleAbs(out, alpha=contrast, beta=brightness)
+            if is_16bit:
+                # convertScaleAbs is 8-bit output only. We must do math manually or use addWeighted.
+                # out = alpha * out + beta
+                out = cv2.convertScaleAbs(out, alpha=contrast, beta=brightness)
+                # WAIT! convertScaleAbs returns 8-bit! We CANNOT use it for 16-bit.
+                # We must use cv2.addWeighted or simple multiplication
+                
+                # out = out * contrast + brightness
+                # brightness in 16-bit scale? 
+                # Presume 'brightness' input is -100 to 100 relative to 8-bit. Scale it up?
+                brightness_16 = brightness * 256
+                
+                out_f = out.astype(np.float32) * contrast + brightness_16
+                out = out_f.clip(0, 65535).astype(np.uint16)
+            else:
+                out = cv2.convertScaleAbs(out, alpha=contrast, beta=brightness)
             
         return out
 

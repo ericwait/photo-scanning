@@ -46,6 +46,7 @@ class ScanRequest(BaseModel):
     auto_contrast: bool = False
     auto_wb: bool = False
     dpi: int = 400
+    bit_depth: int = 24
 
 @app.get("/health")
 def health_check():
@@ -60,7 +61,7 @@ async def get_image(path: str):
 @app.post("/scan")
 async def trigger_scan(request: ScanRequest):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"scan_{timestamp}.bmp"
+    filename = f"scan_{timestamp}.tiff"
     
     try:
         if request.mock:
@@ -70,8 +71,42 @@ async def trigger_scan(request: ScanRequest):
             mock_source_path = os.path.join(BASE_DIR, request.mock_source)
             scan_path = scanner.mock_scan(filename, mock_source_path)
         else:
-            scan_path = scanner.scan_page(filename, dpi=request.dpi)
+            scan_path = scanner.scan_page(filename, dpi=request.dpi, bit_depth=request.bit_depth)
         
+        # Determine actual filename used (in case scanner_service changed extension)
+        actual_filename = os.path.basename(scan_path)
+        scan_url_path = f"/scans/{actual_filename}"
+
+        # If 48-bit OR TIFF, browsers often can't display it.
+        # Create an 8-bit PNG copy for the UI preview.
+        # We also might have switched to PNG from BMP.
+        is_tiff = scan_path.lower().endswith(('.tiff', '.tif'))
+        if request.bit_depth == 48 or is_tiff:
+            import cv2
+            import numpy as np
+            
+            # Read the scan (16-bit or TIFF)
+            # We must verify it exists first? (scanner scan_path ensures it)
+            # Use ANYDEPTH to preserve 16-bit if present, but convert to 8-bit for preview
+            img = cv2.imread(scan_path, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_COLOR)
+            
+            if img is not None:
+                # Create 8-bit preview
+                # Change extension to .png for preview
+                preview_filename = f"preview_{os.path.splitext(actual_filename)[0]}.png"
+                preview_path = os.path.join(SCAN_DIR, preview_filename)
+                
+                # Convert to 8-bit if needed
+                if img.dtype == np.uint16:
+                    img_8 = (img / 256.0).astype(np.uint8)
+                else:
+                    img_8 = img
+                
+                cv2.imwrite(preview_path, img_8)
+                
+                # Use this for the frontend
+                scan_url_path = f"/scans/{preview_filename}"
+
         # Process the scan immediately
         cropped_paths = processor.detect_and_crop(
             scan_path, 
@@ -108,7 +143,7 @@ async def trigger_scan(request: ScanRequest):
     
         return {
             "status": "success",
-            "scan_path": f"/scans/{filename}",
+            "scan_path": scan_url_path,
             "photos": processed_urls
         }
     except Exception as e:
@@ -126,10 +161,35 @@ class RefineRequest(BaseModel):
 @app.post("/refine")
 async def refine_photo(request: RefineRequest):
     try:
-        # scan_path comes as "/scans/filename.jpg", we need absolute path
-        # Assume scan is always in SCAN_DIR for now (managed by us)
+        # scan_path comes as "/scans/filename.jpg" or "/scans/preview_filename.png"
         filename = os.path.basename(request.scan_path)
-        filepath = os.path.join(SCAN_DIR, filename)
+        
+        # If the frontend is sending the preview path, we want to solve relevant to the MASTER scan (TIFF)
+        # Check if it starts with "preview_"
+        if filename.startswith("preview_"):
+            real_filename = filename.replace("preview_", "")
+            # The preview is .png, but master is likely .tiff or .bmp
+            # Try to find the master file
+            potential_master = os.path.join(SCAN_DIR, real_filename)
+            
+            # If extension is still .png, change to .tiff?
+            if not os.path.exists(potential_master):
+                name, ext = os.path.splitext(real_filename)
+                # Try .tiff
+                potential_master_tiff = os.path.join(SCAN_DIR, f"{name}.tiff")
+                if os.path.exists(potential_master_tiff):
+                     filepath = potential_master_tiff
+                elif os.path.exists(os.path.join(SCAN_DIR, f"{name}.bmp")):
+                     filepath = os.path.join(SCAN_DIR, f"{name}.bmp")
+                else:
+                     # Fallback to the preview file itself if master lost?
+                     filepath = os.path.join(SCAN_DIR, filename)
+            else:
+                filepath = potential_master
+        else:
+            filepath = os.path.join(SCAN_DIR, filename)
+            
+        print(f"Refining from source: {filepath}")
         
         output_path = processor.manual_crop(
             filepath, 
@@ -150,6 +210,14 @@ async def refine_photo(request: RefineRequest):
                 url_path = f"/output/{rel}".replace("\\", "/")
         except:
              pass
+
+        # Append timestamp to force browser cache refresh
+        import time
+        ts = int(time.time())
+        if "?" in url_path:
+             url_path += f"&t={ts}"
+        else:
+             url_path += f"?t={ts}"
 
         return {
             "status": "success",
