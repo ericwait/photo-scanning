@@ -25,6 +25,7 @@ function App() {
     const saved = localStorage.getItem('contrast');
     return saved ? Number(saved) : 1.0;
   });
+  const [autoContrast, setAutoContrast] = useState(() => localStorage.getItem('autoContrast') === 'true');
   const [autoWb, setAutoWb] = useState(() => localStorage.getItem('autoWb') === 'true');
   const [showSettings, setShowSettings] = useState(() => localStorage.getItem('showSettings') === 'true');
 
@@ -33,6 +34,7 @@ function App() {
   useEffect(() => { localStorage.setItem('sensitivity', String(sensitivity)); }, [sensitivity]);
   useEffect(() => { localStorage.setItem('cropMargin', String(cropMargin)); }, [cropMargin]);
   useEffect(() => { localStorage.setItem('contrast', String(contrast)); }, [contrast]);
+  useEffect(() => { localStorage.setItem('autoContrast', String(autoContrast)); }, [autoContrast]);
   useEffect(() => { localStorage.setItem('autoWb', String(autoWb)); }, [autoWb]);
   useEffect(() => { localStorage.setItem('showSettings', String(showSettings)); }, [showSettings]);
 
@@ -55,6 +57,7 @@ function App() {
           sensitivity: sensitivity,
           crop_margin: cropMargin,
           contrast: contrast,
+          auto_contrast: autoContrast,
           auto_wb: autoWb
         })
       });
@@ -78,8 +81,13 @@ function App() {
     setIsRefineOpen(true);
   };
 
-  const handleRefineSave = async (points: number[][]) => {
+  const handleRefineSave = async (points: number[][], settings?: { contrast: number; autoContrast: boolean; autoWb: boolean }) => {
     if (!currentScan || refinePhotoIndex === -1) return;
+
+    // Use passed settings or fallback to global state
+    const useContrast = settings ? settings.contrast : contrast;
+    const useAutoContrast = settings ? settings.autoContrast : autoContrast;
+    const useAutoWb = settings ? settings.autoWb : autoWb;
 
     try {
       const response = await fetch(`${API_BASE}/refine`, {
@@ -89,7 +97,10 @@ function App() {
           scan_path: currentScan.scan_path,
           photo_index: refinePhotoIndex,
           points: points,
-          album_name: albumName
+          album_name: albumName,
+          contrast: useContrast,
+          auto_contrast: useAutoContrast,
+          auto_wb: useAutoWb
         })
       });
 
@@ -159,8 +170,13 @@ function App() {
         <RefineModal
           isOpen={isRefineOpen}
           onClose={() => setIsRefineOpen(false)}
-          onSave={handleRefineSave}
+          onSave={(points, settings) => handleRefineSave(points, settings)}
           imageUrl={`${API_BASE}${currentScan.scan_path}`}
+          initialSettings={{
+            contrast: contrast,
+            autoContrast: autoContrast,
+            autoWb: autoWb
+          }}
         />
       )}
       <header className="flex justify-between items-center mb-8 bg-slate-800 p-6 rounded-2xl shadow-xl border border-slate-700">
@@ -271,9 +287,9 @@ function App() {
               <p className="text-xs text-slate-500 mt-1">Increase to make faded colors pop.</p>
             </div>
 
-            {/* Auto White Balance */}
-            <div className="flex items-center gap-4">
-              <div className="flex-1">
+            {/* Auto White Balance & Contrast */}
+            <div className="flex flex-col gap-4">
+              <div>
                 <label className="flex items-center gap-3 cursor-pointer group">
                   <div className={`w-6 h-6 rounded border flex items-center justify-center transition-colors ${autoWb ? 'bg-blue-600 border-blue-600' : 'bg-slate-900 border-slate-700'}`}>
                     {autoWb && <span className="text-white text-sm">✓</span>}
@@ -285,8 +301,26 @@ function App() {
                     onChange={(e) => setAutoWb(e.target.checked)}
                   />
                   <div>
-                    <span className="block text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Auto White Balance</span>
-                    <p className="text-xs text-slate-500 mt-1">Corrects yellow/warm tints automatically.</p>
+                    <span className="block text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Aggressive Auto WB</span>
+                    <p className="text-xs text-slate-500 mt-1">Normalize color channels (removes casts).</p>
+                  </div>
+                </label>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className={`w-6 h-6 rounded border flex items-center justify-center transition-colors ${autoContrast ? 'bg-indigo-600 border-indigo-600' : 'bg-slate-900 border-slate-700'}`}>
+                    {autoContrast && <span className="text-white text-sm">✓</span>}
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="hidden"
+                    checked={autoContrast}
+                    onChange={(e) => setAutoContrast(e.target.checked)}
+                  />
+                  <div>
+                    <span className="block text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Auto Contrast</span>
+                    <p className="text-xs text-slate-500 mt-1">Intelligent histogram clipping (2% Low, 1% High).</p>
                   </div>
                 </label>
               </div>

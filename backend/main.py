@@ -43,6 +43,7 @@ class ScanRequest(BaseModel):
     sensitivity: int = 210
     crop_margin: int = 10
     contrast: float = 1.0
+    auto_contrast: bool = False
     auto_wb: bool = False
 
 @app.get("/health")
@@ -77,6 +78,7 @@ async def trigger_scan(request: ScanRequest):
             sensitivity=request.sensitivity,
             crop_margin=request.crop_margin,
             contrast=request.contrast,
+            auto_contrast=request.auto_contrast,
             auto_wb=request.auto_wb
         )
         
@@ -116,6 +118,9 @@ class RefineRequest(BaseModel):
     photo_index: int
     points: list[list[int]] # [[x,y], [x,y], [x,y], [x,y]]
     album_name: str = "default"
+    contrast: float = 1.0
+    auto_contrast: bool = False
+    auto_wb: bool = False
 
 @app.post("/refine")
 async def refine_photo(request: RefineRequest):
@@ -125,7 +130,15 @@ async def refine_photo(request: RefineRequest):
         filename = os.path.basename(request.scan_path)
         filepath = os.path.join(SCAN_DIR, filename)
         
-        output_path = processor.manual_crop(filepath, request.points, request.photo_index, output_subfolder=request.album_name)
+        output_path = processor.manual_crop(
+            filepath, 
+            request.points, 
+            request.photo_index, 
+            output_subfolder=request.album_name,
+            contrast=request.contrast,
+            auto_contrast=request.auto_contrast,
+            auto_wb=request.auto_wb
+        )
         
         # Determine strict URL return
         url_path = f"/images?path={output_path}" # Fallback

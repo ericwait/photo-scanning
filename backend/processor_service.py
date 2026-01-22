@@ -9,7 +9,7 @@ class ProcessorService:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_wb: bool = False) -> List[str]:
+    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False) -> List[str]:
         """
         Detects multiple photos in a single scanned page and crops them.
         Uses HSV saturation thresholding to isolate color prints from white backgrounds.
@@ -19,6 +19,7 @@ class ProcessorService:
             sensitivity: Value channel threshold (lower = more sensitive to darks, higher = ignores more background). Default 210.
             crop_margin: Number of pixels to crop from each edge of the detected photo. Default 10.
             contrast: Contrast multiplier (1.0 = normal).
+            auto_contrast: Whether to apply histogram clipping (2%/1%).
             auto_wb: Whether to apply automatic white balance (Gray World).
         """
         image = cv2.imread(image_path)
@@ -108,7 +109,7 @@ class ProcessorService:
                 cropped = self._get_warped_crop_from_rect(image, rect, crop_margin=crop_margin)
                 
                 # Apply enhancements
-                cropped = self.apply_corrections(cropped, contrast=contrast, auto_wb=auto_wb)
+                cropped = self.apply_corrections(cropped, contrast=contrast, auto_contrast=auto_contrast, auto_wb=auto_wb)
                 
                 output_name = f"{img_base_name}_photo_{len(cropped_images_paths)}.png"
                 output_path = os.path.join(current_output_dir, output_name)
@@ -138,7 +139,7 @@ class ProcessorService:
             
         return cropped_images_paths
 
-    def manual_crop(self, image_path: str, points: List[List[int]], photo_index: int, output_subfolder: str = None) -> str:
+    def manual_crop(self, image_path: str, points: List[List[int]], photo_index: int, output_subfolder: str = None, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False) -> str:
         """
         Manually crops a photo from the scan using 4 user-provided points.
         points: List of [x, y] coordinates order: TL, TR, BR, BL
@@ -164,6 +165,9 @@ class ProcessorService:
             # Manual crop generally implies no safety margin needed, or minimal, 
             # since user clicked exact points. Let's default to 0 for manual.
             cropped = self._get_warped_crop_from_rect(image, pts, crop_margin=0)
+            
+            # Apply enhancements
+            cropped = self.apply_corrections(cropped, contrast=contrast, auto_contrast=auto_contrast, auto_wb=auto_wb)
             
             img_base_name = os.path.splitext(os.path.basename(image_path))[0]
             output_name = f"{img_base_name}_photo_{photo_index}.png"
@@ -223,26 +227,64 @@ class ProcessorService:
 
         return warped
 
-    def apply_corrections(self, image: np.ndarray, contrast: float = 1.0, brightness: int = 0, auto_wb: bool = False) -> np.ndarray:
+    def apply_corrections(self, image: np.ndarray, contrast: float = 1.0, auto_contrast: bool = False, brightness: int = 0, auto_wb: bool = False) -> np.ndarray:
         """
-        Applies image corrections (Contrast/Brightness, White Balance)
-        contrast: 1.0 is neutral, >1.0 increases contrast.
+        Applies image corrections (Contrast/Brightness, White Balance).
+        contrast: 1.0 is neutral, >1.0 increases contrast (applied after auto-contrast).
+        auto_contrast: If True, applies histogram clipping (2% low, 1% high) to normalize dynamic range.
         brightness: 0 is neutral, +/- adds to pixel values.
-        auto_wb: Simple Gray World assumption white balance.
+        auto_wb: If True, applies "aggressive" White Balance (RGB channel scaling).
         """
         out = image.copy()
         
-        # 1. White Balance (Simple "Gray World")
+        # 1. Aggressive RGB White Balance (Scale to have equal means)
         if auto_wb:
-            result = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
-            avg_a = np.average(result[:, :, 1])
-            avg_b = np.average(result[:, :, 2])
-            result[:, :, 1] = result[:, :, 1] - ((avg_a - 128) * (result[:, :, 0] / 255.0) * 1.1)
-            result[:, :, 2] = result[:, :, 2] - ((avg_b - 128) * (result[:, :, 0] / 255.0) * 1.1)
-            out = cv2.cvtColor(result, cv2.COLOR_LAB2BGR)
+            # We scale R and B to match G's mean luminance
+            # This is more "aggressive" and noticeable than the subtle Gray World
+            b, g, r = cv2.split(out)
+            r_mean = np.mean(r)
+            g_mean = np.mean(g)
+            b_mean = np.mean(b)
+            
+            # Avoid division by zero
+            if r_mean == 0: r_mean = 1
+            if b_mean == 0: b_mean = 1
+            
+            # Scale R and B
+            k_r = g_mean / r_mean
+            k_b = g_mean / b_mean
+            
+            r = cv2.convertScaleAbs(r, alpha=k_r)
+            b = cv2.convertScaleAbs(b, alpha=k_b)
+            
+            out = cv2.merge([b, g, r])
 
-        # 2. Contrast & Brightness
-        # cv2.convertScaleAbs(image, alpha=contrast, beta=brightness)
+        # 2. Auto Contrast (Histogram Clipping: 2% low, 1% high)
+        if auto_contrast:
+            # Convert to LAB for luminance processing to avoid color shifts
+            lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            
+            # Calculate percentiles on Luminance channel
+            p_low = np.percentile(l, 2)
+            p_high = np.percentile(l, 99)
+            
+            # Avoid division by zero
+            if p_high <= p_low:
+                p_high = 255
+                p_low = 0
+                
+            # Stretch histogram
+            # New_L = (L - p_low) * (255 / (p_high - p_low))
+            scale = 255.0 / (p_high - p_low)
+            l = cv2.subtract(l, p_low) # subtract low
+            l = cv2.convertScaleAbs(l, alpha=scale) # scale
+            
+            # Merge back
+            lab = cv2.merge([l, a, b])
+            out = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+        # 3. Manual Contrast & Brightness (Applied on top)
         if contrast != 1.0 or brightness != 0:
             out = cv2.convertScaleAbs(out, alpha=contrast, beta=brightness)
             
