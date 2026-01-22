@@ -60,16 +60,30 @@ class ScannerService:
             # Scan Area / Size
             # Ensure we scan the full bed (Max Size / A4 297mm) to avoid cropping
             try:
-                # Try Max Size to get the full glass area
-                ss.SetCapability(twain.ICAP_SUPPORTEDSIZES, twain.TWTY_UINT16, twain.TWSS_MAXSIZE)
-                print("Set scan area to Max Size (Full Bed)")
-            except Exception as e:
-                # Fallback to A4 (297mm) if Max Size fails
+                # Set units to inches first to be sure of dimensions
+                ss.SetCapability(twain.ICAP_UNITS, twain.TWTY_UINT16, twain.TWUN_INCHES)
+                
+                # Try A4 (11.69") first as it's a standard large size longer than Letter (11")
                 try:
                     ss.SetCapability(twain.ICAP_SUPPORTEDSIZES, twain.TWTY_UINT16, twain.TWSS_A4)
-                    print("Set scan area to A4 (297mm height)")
+                    print("Set scan area to A4 (11.69 inches)")
                 except:
-                    print(f"Warning: Failed to set scan area size: {e}")
+                    # Try Max Size to get the full glass area
+                    try:
+                        ss.SetCapability(twain.ICAP_SUPPORTEDSIZES, twain.TWTY_UINT16, twain.TWSS_MAXSIZE)
+                        print("Set scan area to Max Size (Full Bed)")
+                    except Exception as e:
+                        print(f"Warning: Failed to set TWAIN supported sizes: {e}")
+                        # Final attempt: manual frame (8.5 x 11.7 inches for V600)
+                        try:
+                            # Some drivers support setting the frame directly
+                            # Left, Top, Right, Bottom
+                            ss.SetCapability(twain.ICAP_FRAMES, twain.TWTY_FRAME, (0.0, 0.0, 8.5, 11.7))
+                            print("Set manual scan frame: 8.5 x 11.7 inches")
+                        except:
+                            pass
+            except Exception as e:
+                print(f"Warning: Failed to configure scan area: {e}")
 
             # Pixel Type (Color)
             try:
