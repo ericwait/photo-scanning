@@ -11,7 +11,7 @@ class ProcessorService:
 
 
 
-    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False) -> List[dict]:
+    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False, grid_rows: int = 3, grid_cols: int = 1, ignore_black_background: bool = False) -> List[dict]:
         """
         Detects multiple photos in a single scanned page and crops them.
         Returns: List of dicts { "path": str, "points": List[List[int]] }
@@ -60,6 +60,14 @@ class ProcessorService:
         # Combine: It's a photo if it has color OR is dark
         combined_mask = cv2.bitwise_or(s_thresh, v_thresh)
         
+        # Optional: Black Background filtering (Bandpass)
+        # Apply to the COMBINED mask. 
+        # This ensures that even if saturation triggered detection (noise), 
+        # simple darkness (V < 40) will veto it.
+        if ignore_black_background:
+            _, bg_thresh = cv2.threshold(v_channel, 40, 255, cv2.THRESH_BINARY)
+            combined_mask = cv2.bitwise_and(combined_mask, bg_thresh)
+        
         # 3. Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         morphed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
@@ -79,7 +87,6 @@ class ProcessorService:
         img_h, img_w = scan_8bit.shape[:2]
         full_area = img_h * img_w
         
-        # We expect typically 3 photos per page, but let's be flexible
         photo_candidates = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
@@ -88,23 +95,60 @@ class ProcessorService:
             if (full_area * 0.05) < area < (full_area * 0.90):
                 photo_candidates.append(cnt)
         
-        # Sort top-to-bottom based on the center of the bounding box
-        def get_center_y(cnt):
+        # Sort top-to-bottom, left-to-right (Row-major)
+        # This handles grids (e.g. 2x2) correctly
+        def get_center(cnt):
             M = cv2.moments(cnt)
-            if M["m00"] == 0: return 0
-            return int(M["m01"] / M["m00"])
-            
-        photo_candidates.sort(key=get_center_y)
+            if M["m00"] == 0: return (0, 0)
+            return (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])) # x, y
+
+        centers = [get_center(cnt) for cnt in photo_candidates]
+        candidates_with_centers = list(zip(photo_candidates, centers))
+        
+        # Sort primarily by Y to get rough top-down order
+        candidates_with_centers.sort(key=lambda x: x[1][1])
+        
+        sorted_candidates = []
+        current_row = []
+        # Threshold to consider items as being on the same "row"
+        # 150px is generous but ensures slightly skewed placements are grouped
+        ROW_Y_THRESHOLD = 150 
+        
+        for item in candidates_with_centers:
+            if not current_row:
+                current_row.append(item)
+            else:
+                # Compare with the Y of the first item in the current row
+                row_y = current_row[0][1][1]
+                cy = item[1][1]
+                
+                if abs(cy - row_y) < ROW_Y_THRESHOLD:
+                    current_row.append(item)
+                else:
+                    # Finish this row: Sort by X (Left->Right)
+                    current_row.sort(key=lambda x: x[1][0])
+                    sorted_candidates.extend([x[0] for x in current_row])
+                    # Start new row
+                    current_row = [item]
+                    
+        # Flush last row
+        if current_row:
+             current_row.sort(key=lambda x: x[1][0])
+             sorted_candidates.extend([x[0] for x in current_row])
+             
+        photo_candidates = sorted_candidates
         
         results = []
         img_base_name = os.path.basename(image_path).split('.')[0]
         
+        # Calculate expected total
+        expected_count = grid_rows * grid_cols
+        if expected_count < 1: expected_count = 1
+        
         # Process found candidates
         for idx, cnt in enumerate(photo_candidates):
-            # Limit to top 3 largest/most relevant if we have too many? 
-            # Logic: If we found > 3, we might need better logic, but usually it's noise.
-            # For now, let's take up to 3.
-            if len(results) >= 3:
+            # Limit to expected count
+            if len(results) >= expected_count:
                 break
 
             # Use convex hull to smooth out detections and get a more stable box
@@ -146,9 +190,9 @@ class ProcessorService:
             except Exception as e:
                 print(f"Failed to process photo candidate {idx}: {e}")
                 
-        # Fallback: Ensure we always return at least 3 items (or slots)
+        # Fallback: Ensure we always return 'expected_count' items (or slots)
         # If we missed one, create a placeholder so the user can manually refine it
-        while len(results) < 3:
+        while len(results) < expected_count:
             idx = len(results)
             placeholder = np.zeros((400, 600, 3), dtype=np.uint8)
             placeholder[:] = (30, 30, 30) # Dark gray background

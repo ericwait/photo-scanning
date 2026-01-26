@@ -32,6 +32,9 @@ function App() {
   const [dpi, setDpi] = useState(() => Number(localStorage.getItem('dpi')) || 400);
   const [use48Bit, setUse48Bit] = useState(() => localStorage.getItem('use48Bit') === 'true');
   const [showSettings, setShowSettings] = useState(() => localStorage.getItem('showSettings') === 'true');
+  const [gridRows, setGridRows] = useState(() => Number(localStorage.getItem('gridRows')) || 3);
+  const [gridCols, setGridCols] = useState(() => Number(localStorage.getItem('gridCols')) || 1);
+  const [ignoreBlackBackground, setIgnoreBlackBackground] = useState(() => localStorage.getItem('ignoreBlackBackground') === 'true');
 
   // Persist settings changes
   useEffect(() => { localStorage.setItem('albumName', albumName); }, [albumName]);
@@ -43,6 +46,9 @@ function App() {
   useEffect(() => { localStorage.setItem('dpi', String(dpi)); }, [dpi]);
   useEffect(() => { localStorage.setItem('use48Bit', String(use48Bit)); }, [use48Bit]);
   useEffect(() => { localStorage.setItem('showSettings', String(showSettings)); }, [showSettings]);
+  useEffect(() => { localStorage.setItem('gridRows', String(gridRows)); }, [gridRows]);
+  useEffect(() => { localStorage.setItem('gridCols', String(gridCols)); }, [gridCols]);
+  useEffect(() => { localStorage.setItem('ignoreBlackBackground', String(ignoreBlackBackground)); }, [ignoreBlackBackground]);
 
   const API_BASE = "http://localhost:8000";
 
@@ -66,7 +72,10 @@ function App() {
           auto_contrast: autoContrast,
           auto_wb: autoWb,
           dpi: dpi,
-          bit_depth: use48Bit ? 48 : 24
+          bit_depth: use48Bit ? 48 : 24,
+          grid_rows: gridRows,
+          grid_cols: gridCols,
+          ignore_black_background: ignoreBlackBackground
         })
       });
 
@@ -231,6 +240,43 @@ function App() {
 
         {showSettings && (
           <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in-down">
+            {/* Grid Layout Settings */}
+            <div>
+              <div className="flex justify-between mb-2">
+                <label className="text-sm font-medium text-slate-400">
+                  Expected Grid
+                </label>
+                <span className="text-xs text-slate-500 bg-slate-900 px-2 py-0.5 rounded">
+                  {gridRows} x {gridCols} ({gridRows * gridCols} Photos)
+                </span>
+              </div>
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <label className="text-xs text-slate-500 mb-1 block">Rows</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={gridRows}
+                    onChange={(e) => setGridRows(Number(e.target.value))}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-slate-500 mb-1 block">Cols</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={gridCols}
+                    onChange={(e) => setGridCols(Number(e.target.value))}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">Arrangement on scanner bed.</p>
+            </div>
+
             {/* Output Folder / Album */}
             <div>
               <label className="block text-sm font-medium text-slate-400 mb-2">
@@ -323,7 +369,7 @@ function App() {
               <p className="text-xs text-slate-500 mt-1">Higher = more detail but slower. 300-600 is standard.</p>
             </div>
 
-            {/* Auto White Balance & Contrast */}
+            {/* Auto White Balance & Contrast & 48-bit & BlackBg */}
             <div className="flex flex-col gap-4">
               <div>
                 <label className="flex items-center gap-3 cursor-pointer group">
@@ -375,6 +421,24 @@ function App() {
                   <div>
                     <span className="block text-sm font-medium text-slate-300 group-hover:text-white transition-colors">High Quality Scan (48-bit)</span>
                     <p className="text-xs text-slate-500 mt-1">Slower. Uses 16-bits per color for smoother gradients.</p>
+                  </div>
+                </label>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className={`w-6 h-6 rounded border flex items-center justify-center transition-colors ${ignoreBlackBackground ? 'bg-gray-600 border-gray-600' : 'bg-slate-900 border-slate-700'}`}>
+                    {ignoreBlackBackground && <span className="text-white text-sm">✓</span>}
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="hidden"
+                    checked={ignoreBlackBackground}
+                    onChange={(e) => setIgnoreBlackBackground(e.target.checked)}
+                  />
+                  <div>
+                    <span className="block text-sm font-medium text-slate-300 group-hover:text-white transition-colors">Ignore Black Background</span>
+                    <p className="text-xs text-slate-500 mt-1">Use if scanning on black mat. Ignores very dark areas.</p>
                   </div>
                 </label>
               </div>

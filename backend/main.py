@@ -47,6 +47,9 @@ class ScanRequest(BaseModel):
     auto_wb: bool = False
     dpi: int = 400
     bit_depth: int = 24
+    grid_rows: int = 3
+    grid_cols: int = 1
+    ignore_black_background: bool = False
 
 @app.get("/health")
 def health_check():
@@ -115,7 +118,10 @@ async def trigger_scan(request: ScanRequest):
             crop_margin=request.crop_margin,
             contrast=request.contrast,
             auto_contrast=request.auto_contrast,
-            auto_wb=request.auto_wb
+            auto_wb=request.auto_wb,
+            grid_rows=request.grid_rows,
+            grid_cols=request.grid_cols,
+            ignore_black_background=request.ignore_black_background
         )
         
         # Modify returned paths to be URLs
