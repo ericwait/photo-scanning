@@ -123,7 +123,7 @@ class SmartDetector:
                     best_size_px = (sl_px, sw_px) # Matches w, h orientation
             
             # tolerance
-            tolerance = dpi * 1.5 # Relaxed tolerance (1.5 inches) because we might detect content inside margin
+            tolerance = dpi * 0.25 # Stricter tolerance (0.25 inches) to prevent false matches on large items
             
             # IMPROVEMENT: If we didn't match a standard size within strict tolerance, 
             # check if we are "close enough" (e.g. +/- 20%) to one, and snap to it anyway.
@@ -134,7 +134,7 @@ class SmartDetector:
             final_confidence = 0.5
             
             if best_fit_score < tolerance:
-                # Good match
+                # Good match (Absolute error is small)
                 final_size = best_size_px
                 final_rect = ((cx, cy), final_size, angle)
                 final_label = best_label
