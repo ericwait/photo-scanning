@@ -34,7 +34,11 @@ function App() {
   const [showSettings, setShowSettings] = useState(() => localStorage.getItem('showSettings') === 'true');
   const [gridRows, setGridRows] = useState(() => Number(localStorage.getItem('gridRows')) || 3);
   const [gridCols, setGridCols] = useState(() => Number(localStorage.getItem('gridCols')) || 1);
-  const [ignoreBlackBackground, setIgnoreBlackBackground] = useState(() => localStorage.getItem('ignoreBlackBackground') === 'true');
+  // Allowed Sizes
+  const [allowedSizes, setAllowedSizes] = useState<string[]>(() => {
+    const saved = localStorage.getItem('allowedSizes');
+    return saved ? JSON.parse(saved) : ["PHOTO_4X6", "PHOTO_3X5", "PHOTO_5X7", "WALLET", "PHOTO_8X10"];
+  });
 
   // Persist settings changes
   useEffect(() => { localStorage.setItem('albumName', albumName); }, [albumName]);
@@ -49,11 +53,9 @@ function App() {
   useEffect(() => { localStorage.setItem('gridRows', String(gridRows)); }, [gridRows]);
   useEffect(() => { localStorage.setItem('gridCols', String(gridCols)); }, [gridCols]);
   useEffect(() => { localStorage.setItem('ignoreBlackBackground', String(ignoreBlackBackground)); }, [ignoreBlackBackground]);
+  useEffect(() => { localStorage.setItem('allowedSizes', JSON.stringify(allowedSizes)); }, [allowedSizes]);
 
   const API_BASE = "http://localhost:8002";
-
-  // Removed fetchHistory as history panel is gone
-
 
   const handleScan = async (mock = false) => {
     setIsScanning(true);
@@ -75,7 +77,8 @@ function App() {
           bit_depth: use48Bit ? 48 : 24,
           grid_rows: gridRows,
           grid_cols: gridCols,
-          ignore_black_background: ignoreBlackBackground
+          ignore_black_background: ignoreBlackBackground,
+          allowed_sizes: allowedSizes
         })
       });
 
@@ -92,6 +95,31 @@ function App() {
       setIsScanning(false);
     }
   };
+
+  const toggleSize = (size: string) => {
+    setAllowedSizes(prev => {
+      if (prev.includes(size)) {
+        return prev.filter(s => s !== size);
+      } else {
+        return [...prev, size];
+      }
+    });
+  };
+
+  // ... (rest of methods)
+  // Re-define handleScan and toggleSize helper before return, but I replaced the whole block 
+  // Wait, I need to make sure I don't delete other methods.
+  // I will just return the full component code block for safety since I am replacing a large chunk.
+  // Actually, I can just replace the state init block and the handleScan block.
+  // But I also need to insert the UI code.
+  // Let's replace state init first. Then handleScan. Then UI.
+  // But wait, the tool requires contiguous blocks? No, multiple chunks allowed? No, I must use multi_replace for that.
+
+  // I will use multi_replace.
+
+  return (
+    // ...
+  )
 
   const openRefine = (index: number) => {
     setRefinePhotoIndex(index);
@@ -441,6 +469,37 @@ function App() {
                     <p className="text-xs text-slate-500 mt-1">Use if scanning on black mat. Ignores very dark areas.</p>
                   </div>
                 </label>
+              </div>
+
+              {/* Allowed Sizes */}
+              <div className="col-span-1 md:col-span-3 border-t border-slate-700 pt-4 mt-2">
+                <label className="block text-sm font-medium text-slate-400 mb-3">
+                  Allowed Sizes Allowed (Strict)
+                </label>
+                <div className="flex flex-wrap gap-4">
+                  {[
+                    { id: "PHOTO_4X6", label: "4x6" },
+                    { id: "PHOTO_3X5", label: "3x5" },
+                    { id: "PHOTO_5X7", label: "5x7" },
+                    { id: "PHOTO_8X10", label: "8x10" },
+                    { id: "WALLET", label: "Wallet" },
+                    { id: "Custom", label: "Custom/Weird" }
+                  ].map(size => (
+                    <label key={size.id} className="flex items-center gap-2 cursor-pointer group">
+                      <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${allowedSizes.includes(size.id) ? 'bg-emerald-600 border-emerald-600' : 'bg-slate-900 border-slate-700'}`}>
+                        {allowedSizes.includes(size.id) && <span className="text-white text-xs">✓</span>}
+                      </div>
+                      <input
+                        type="checkbox"
+                        className="hidden"
+                        checked={allowedSizes.includes(size.id)}
+                        onChange={() => toggleSize(size.id)}
+                      />
+                      <span className="text-sm text-slate-300 group-hover:text-white transition-colors">{size.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-500 mt-2">Only photos matching checked sizes will be detected. Uncheck "Custom" to strictly enforce standard sizes.</p>
               </div>
             </div>
           </div>
