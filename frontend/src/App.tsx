@@ -34,10 +34,17 @@ function App() {
   const [showSettings, setShowSettings] = useState(() => localStorage.getItem('showSettings') === 'true');
   const [gridRows, setGridRows] = useState(() => Number(localStorage.getItem('gridRows')) || 3);
   const [gridCols, setGridCols] = useState(() => Number(localStorage.getItem('gridCols')) || 1);
+  const [ignoreBlackBackground, setIgnoreBlackBackground] = useState(() => localStorage.getItem('ignoreBlackBackground') === 'true');
+
   // Allowed Sizes
   const [allowedSizes, setAllowedSizes] = useState<string[]>(() => {
-    const saved = localStorage.getItem('allowedSizes');
-    return saved ? JSON.parse(saved) : ["PHOTO_4X6", "PHOTO_3X5", "PHOTO_5X7", "WALLET", "PHOTO_8X10"];
+    try {
+      const saved = localStorage.getItem('allowedSizes');
+      return saved ? JSON.parse(saved) : ["PHOTO_4X6", "PHOTO_3X5", "PHOTO_5X7", "WALLET", "PHOTO_8X10"];
+    } catch (e) {
+      console.error("Failed to parse allowedSizes", e);
+      return ["PHOTO_4X6", "PHOTO_3X5", "PHOTO_5X7", "WALLET", "PHOTO_8X10"];
+    }
   });
 
   // Persist settings changes
