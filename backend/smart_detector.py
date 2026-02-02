@@ -16,6 +16,7 @@ class DetectionResult:
     box: List[List[int]]  # 4 points [x, y]
     confidence: float
     size_label: str
+    rect: Optional[Tuple[Tuple[float, float], Tuple[float, float], float]] = None # ((cx, cy), (w, h), angle)
 
 class SmartDetector:
     def __init__(self):
@@ -230,7 +231,8 @@ class SmartDetector:
                 results.append(DetectionResult(
                     box=box.tolist(),
                     confidence=final_confidence, 
-                    size_label=final_label
+                    size_label=final_label,
+                    rect=final_rect
                 ))
                     
         return results
