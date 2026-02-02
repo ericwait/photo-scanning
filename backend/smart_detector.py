@@ -42,12 +42,189 @@ class SmartDetector:
         entropy_map = self._calculate_texture_map(gray)
         
         # 3. Find Candidates
-        candidates = self._find_candidates(entropy_map)
+        candidates = self._find_candidates(entropy_map, dpi)
+        
+        # 3b. Refine Candidates (Find Paper Edges)
+        # Refinement temporarily disabled as it causes performance issues with Canny on high-res scans
+        # refined_candidates = []
+        # for cand in candidates:
+        #    refined_rect = self._refine_candidate_box(gray, cand["contour"])
+        #    if refined_rect:
+        #         cand["rect"] = refined_rect
         
         # 4. Fit Standard Sizes
         results = self._optimize_fits(candidates, dpi, image.shape)
         
         return results
+
+    def _refine_candidate_box(self, gray: np.ndarray, content_contour: np.ndarray) -> Optional[Tuple]:
+        """
+        Refines the candidate box by looking for the paper edge around the high-entropy content.
+        Uses Adaptive Thresholding in a region of interest.
+        """
+        # ... logic present but disabled in caller ...
+        return None 
+
+    def _calculate_texture_map(self, gray: np.ndarray, kernel_size: int = 21) -> np.ndarray:
+        # ... existing ...
+        return super()._calculate_texture_map(gray, kernel_size) if hasattr(super(), '_calculate_texture_map') else self._calculate_texture_map_impl(gray, kernel_size)
+    
+    # Preventing replace error, reverting to simple replacement of the method block above
+    # Actually I used text replace. I should just target the loop.
+
+    def _optimize_fits(self, candidates: List[Dict], dpi: int, image_shape: Tuple[int, ...]) -> List[DetectionResult]:
+        """
+        Fits standard sizes to the candidates.
+        """
+        results = []
+        
+        for cand in candidates:
+            # Get the candidate approximate size in pixels
+            rect = cand["rect"]
+            (cx, cy), (w, h), angle = rect
+            
+            best_fit_score = float('inf')
+            best_label = "Unknown"
+            best_size_px = (0, 0)
+            
+            # Check against standard sizes
+            for size in StandardSize:
+                sw_in, sl_in = size.value
+                
+                # Convert to pixels
+                sw_px = sw_in * dpi
+                sl_px = sl_in * dpi
+                
+                # Check orientation 1: (w ~ sw, h ~ sl)
+                score1 = abs(w - sw_px) + abs(h - sl_px)
+                
+                # Check orientation 2: (w ~ sl, h ~ sw)
+                score2 = abs(w - sl_px) + abs(h - sw_px)
+                
+                if score1 < best_fit_score:
+                    best_fit_score = score1
+                    best_label = size.name
+                    best_size_px = (sw_px, sl_px) # Matches w, h orientation
+                    
+                if score2 < best_fit_score:
+                    best_fit_score = score2
+                    best_label = size.name
+                    best_size_px = (sl_px, sw_px) # Matches w, h orientation
+            
+            # tolerance
+            tolerance = dpi * 1.5 # Relaxed tolerance (1.5 inches) because we might detect content inside margin
+            
+            if best_fit_score < tolerance:
+                # Force the box to be exactly the standard size
+                final_size = best_size_px
+                
+                # Create a new rect with the standard size, preserving original center and angle
+                # Note: 'angle' from minAreaRect is typically -90 to 0. 
+                # If we swapped dimensions to match, we don't need to change angle if we set size correctly?
+                # minAreaRect(center, (w,h), angle).
+                # If we matched w->size[0] and h->size[1], we just update size.
+                
+                new_rect = ((cx, cy), final_size, angle)
+                
+                # Convert rotated rect to 4 points
+                box = cv2.boxPoints(new_rect)
+                box = np.int64(box)
+                
+                results.append(DetectionResult(
+                    box=box.tolist(),
+                    confidence=1.0 - (best_fit_score / tolerance), 
+                    size_label=best_label
+                ))
+            else:
+                 # If it doesn't match a standard size well
+                 dim1, dim2 = sorted((w, h))
+                 if dim1 > dpi * 1.5 and dim2 > dpi * 1.5: 
+                    box = cv2.boxPoints(rect)
+                    box = np.int64(box)
+                    results.append(DetectionResult(
+                        box=box.tolist(),
+                        confidence=0.5,
+                        size_label="Custom"
+                    ))
+                    
+        return results
+        """
+        Refines the candidate box by looking for the paper edge around the high-entropy content.
+        Uses Adaptive Thresholding in a region of interest.
+        """
+        x, y, w, h = cv2.boundingRect(content_contour)
+        
+        # Define expansion margin (e.g. 1 inch = ~300-400 px, or just a fixed large buffer)
+        margin = 100 
+        
+        h_img, w_img = gray.shape[:2]
+        
+        x1 = max(0, x - margin)
+        y1 = max(0, y - margin)
+        x2 = min(w_img, x + w + margin)
+        y2 = min(h_img, y + h + margin)
+        
+        roi = gray[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
+            
+        # Use Otsu's thresholding in the ROI to find the paper object vs background
+        # Assume paper is darker than the white lid background? NO.
+        # Paper is white, Lid is white. Edge is shadow.
+        # Adaptive was better for edges, but maybe hanging?
+        # Let's try simple gradient/Canny?
+        # Or just use Otsu on the INVERTED image (if finding dark edge).
+        
+        # Let's try Otsu on blurred ROI
+        blurred = cv2.GaussianBlur(roi, (5, 5), 0)
+        # Try finding the object directly. 
+        # Usually Photo Content is darker than White Page Border is darker/lighter than White Lid?
+        # Actually photos are usually darker than the lid.
+        # But we want the Paper Edge.
+        
+        # Let's stick to Canny for Edge Detection, it's robust and fast.
+        edges = cv2.Canny(blurred, 30, 100)
+        
+        # Dilate edges to close the loop
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        closed_edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+        
+        contours, _ = cv2.findContours(closed_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if len(contours) > 500:
+            # Too noisy, abort refinement
+            return cv2.minAreaRect(content_contour)
+        
+        # Find largest contour that is "larger" than content_contour (or simply largest in ROI)
+        # The content contour is in global coords. We need to check relative.
+        
+        # Heuristic: Largest contour in ROI is likely the paper edge (plus maybe some noise attached)
+        # We can also check if it contains the center of the ROI.
+        if not contours:
+            return cv2.minAreaRect(content_contour)
+            
+        largest = max(contours, key=cv2.contourArea)
+        
+        # If largest contour is significantly smaller than content, something went wrong.
+        # Otherwise, use it.
+        # But we need to map it back to global coordinates.
+        
+        # minAreaRect in ROI
+        (rcx, rcy), (rw, rh), rang = cv2.minAreaRect(largest)
+        
+        # Shift center to global
+        gcx = rcx + x1
+        gcy = rcy + y1
+        
+        # If the refined size is smaller than original content, reject it (it's noise)
+        orig_rect = cv2.minAreaRect(content_contour)
+        orig_area = orig_rect[1][0] * orig_rect[1][1]
+        new_area = rw * rh
+        
+        if new_area < orig_area * 0.8:
+            return orig_rect
+            
+        return ((gcx, gcy), (rw, rh), rang)
 
     def _calculate_texture_map(self, gray: np.ndarray, kernel_size: int = 21) -> np.ndarray:
         """
@@ -78,28 +255,57 @@ class SmartDetector:
         
         return sigma
 
-    def _find_candidates(self, texture_map: np.ndarray) -> List[Dict]:
+    def _find_candidates(self, texture_map: np.ndarray, dpi: int) -> List[Dict]:
         """
         Finds rough regions of interest (blobs) in the texture map.
         """
         # Threshold the texture map
         # Assume background is smooth (low texture), photos are detailed (high texture)
-        _, thresh = cv2.threshold(texture_map, 20, 255, cv2.THRESH_BINARY)
+        # Otsu failed (merged background), so we use a higher fixed threshold to cut out background noise.
+        _, thresh = cv2.threshold(texture_map, 50, 255, cv2.THRESH_BINARY)
         
         # Morphological operations to fill gaps
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
         closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
         
         # Find contours
-        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Use RETR_TREE to handle nested contours (Frame -> Photos)
+        contours, hierarchy = cv2.findContours(closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         
         candidates = []
-        for c in contours:
-            rect = cv2.minAreaRect(c)
-            candidates.append({
-                "contour": c,
-                "rect": rect  # (center(x, y), (width, height), angle)
-            })
+        h, w = texture_map.shape[:2]
+        total_area = h * w
+        min_area = (dpi * 1.0) ** 2  # Min 1 square inch
+        
+        if contours and hierarchy is not None:
+             hierarchy = hierarchy[0] # Flatten
+             
+             for i, c in enumerate(contours):
+                rect = cv2.minAreaRect(c)
+                box_area = rect[1][0] * rect[1][1]
+                
+                # Filter out tiny noise
+                if box_area < min_area:
+                    continue
+                
+                # Check for Container/Frame
+                # If it's a Parent (has child) and is Large (> 25% area)
+                # hierarchy: [Next, Prev, First_Child, Parent]
+                # child index != -1 means it has a child
+                has_child = hierarchy[i][2] != -1
+                
+                if has_child and box_area > (total_area * 0.25):
+                     # This is likely the scanner frame containing the photos
+                     continue
+                
+                # Filter out giant contours that are just too big regardless of hierarchy (e.g. 95%)
+                if box_area > (total_area * 0.95):
+                    continue
+
+                candidates.append({
+                    "contour": c,
+                    "rect": rect  # (center(x, y), (width, height), angle)
+                })
             
         return candidates
 
