@@ -114,38 +114,78 @@ class SmartDetector:
             # tolerance
             tolerance = dpi * 1.5 # Relaxed tolerance (1.5 inches) because we might detect content inside margin
             
+            # IMPROVEMENT: If we didn't match a standard size within strict tolerance, 
+            # check if we are "close enough" (e.g. +/- 20%) to one, and snap to it anyway.
+            # This handles cases where crop is slightly off or paper has borders.
+            
+            final_rect = None
+            final_label = "Custom"
+            final_confidence = 0.5
+            
             if best_fit_score < tolerance:
-                # Force the box to be exactly the standard size
+                # Good match
                 final_size = best_size_px
+                final_rect = ((cx, cy), final_size, angle)
+                final_label = best_label
+                final_confidence = 1.0 - (best_fit_score / tolerance)
                 
-                # Create a new rect with the standard size, preserving original center and angle
-                # Note: 'angle' from minAreaRect is typically -90 to 0. 
-                # If we swapped dimensions to match, we don't need to change angle if we set size correctly?
-                # minAreaRect(center, (w,h), angle).
-                # If we matched w->size[0] and h->size[1], we just update size.
-                
-                new_rect = ((cx, cy), final_size, angle)
-                
+            else:
+                 # Check relative error instead of absolute pixels
+                 # If dimensions are within 15% of a standard size, snap to it.
+                 best_rel_error = float('inf')
+                 best_rel_size = None
+                 best_rel_label = None
+                 
+                 for size in StandardSize:
+                    sw_in, sl_in = size.value
+                    sw_px = sw_in * dpi
+                    sl_px = sl_in * dpi
+                    
+                    # Check dim1/dim2 vs sw/sl
+                    # dim1 is smaller, dim2 is larger (from sorted((w,h)))
+                    std_min, std_max = sorted((sw_px, sl_px))
+                    detected_min, detected_max = sorted((w, h))
+                    
+                    err_min = abs(detected_min - std_min) / std_min
+                    err_max = abs(detected_max - std_max) / std_max
+                    
+                    avg_err = (err_min + err_max) / 2.0
+                    
+                    if avg_err < 0.20: # 20% tolerance
+                        if avg_err < best_rel_error:
+                            best_rel_error = avg_err
+                            # Which orientation?
+                            if w < h:
+                                best_rel_size = (std_min, std_max)
+                            else:
+                                best_rel_size = (std_max, std_min)
+                            best_rel_label = size.name
+                 
+                 if best_rel_size:
+                     final_size = best_rel_size
+                     final_rect = ((cx, cy), final_size, angle)
+                     final_label = best_rel_label
+                     final_confidence = 0.8 - best_rel_error # Lower confidence than direct fit
+                 else:
+                     # True Custom
+                     # Only accept if reasonably photosized (e.g. > 2x2 inches)
+                     # 1.5 inch min dimension
+                     dim1, dim2 = sorted((w, h))
+                     if dim1 > dpi * 1.5 and dim2 > dpi * 1.5: 
+                        final_rect = rect
+                        final_label = "Custom"
+                        final_confidence = 0.5
+            
+            if final_rect:
                 # Convert rotated rect to 4 points
-                box = cv2.boxPoints(new_rect)
+                box = cv2.boxPoints(final_rect)
                 box = np.int64(box)
                 
                 results.append(DetectionResult(
                     box=box.tolist(),
-                    confidence=1.0 - (best_fit_score / tolerance), 
-                    size_label=best_label
+                    confidence=final_confidence, 
+                    size_label=final_label
                 ))
-            else:
-                 # If it doesn't match a standard size well
-                 dim1, dim2 = sorted((w, h))
-                 if dim1 > dpi * 1.5 and dim2 > dpi * 1.5: 
-                    box = cv2.boxPoints(rect)
-                    box = np.int64(box)
-                    results.append(DetectionResult(
-                        box=box.tolist(),
-                        confidence=0.5,
-                        size_label="Custom"
-                    ))
                     
         return results
         """
