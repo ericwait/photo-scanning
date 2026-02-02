@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 from typing import List, Tuple
+from smart_detector import SmartDetector
 
 class ProcessorService:
     def __init__(self, output_dir: str):
@@ -11,7 +12,7 @@ class ProcessorService:
 
 
 
-    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False, grid_rows: int = 3, grid_cols: int = 1, ignore_black_background: bool = False) -> List[dict]:
+    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False, grid_rows: int = 3, grid_cols: int = 1, ignore_black_background: bool = False, dpi: int = 300, use_smart_detection: bool = True) -> List[dict]:
         """
         Detects multiple photos in a single scanned page and crops them.
         Returns: List of dicts { "path": str, "points": List[List[int]] }
@@ -62,71 +63,99 @@ class ProcessorService:
                 # This ensures the page/photo contrast is maximized in the histogram
                 scan_8bit = cv2.normalize(scan_8bit, None, 0, 255, cv2.NORM_MINMAX)
         
-        # 1. Convert to HSV (Use 8-bit version)
-        hsv = cv2.cvtColor(scan_8bit, cv2.COLOR_BGR2HSV)
-        s_channel = hsv[:,:,1]
-        v_channel = hsv[:,:,2]
+        if use_smart_detection:
+            # New Smart Detection Logic (Entropy + Standard Sizes)
+            # Use the 8-bit image (which might have been cropped by _detect_scan_area)
+            try:
+                detector = SmartDetector()
+                smart_results = detector.detect(scan_8bit, dpi)
+                
+                # Convert to contours for compatibility with downstream sorting/cropping logic
+                all_contours = []
+                for res in smart_results:
+                    # Convert list of 4 points to numpy array shape (4, 1, 2) which is standard contour format
+                    cnt = np.array(res.box, dtype=np.int32).reshape((-1, 1, 2))
+                    all_contours.append(cnt)
+                    
+                print(f"Info: SmartDetector found {len(all_contours)} photos")
+            except Exception as e:
+                print(f"Error in SmartDetector: {e}. Falling back to legacy detection.")
+                use_smart_detection = False 
         
-        # 2. Strategy A: Standard Color/Value Masking
-        # Mask 1: Saturation (Color). Lowered to 30 to catch duller colors.
-        _, s_thresh = cv2.threshold(s_channel, 30, 255, cv2.THRESH_BINARY)
-        
-        # Mask 2: Value (Brightness). Catch dark items on white background.
-        v_thresh_val = sensitivity 
-        _, v_thresh = cv2.threshold(v_channel, v_thresh_val, 255, cv2.THRESH_BINARY_INV)
-        
-        # Combine: It's a photo if it has color OR is dark
-        combined_mask = cv2.bitwise_or(s_thresh, v_thresh)
-        
-        if ignore_black_background:
-            _, bg_thresh = cv2.threshold(v_channel, 40, 255, cv2.THRESH_BINARY)
-            combined_mask = cv2.bitwise_and(combined_mask, bg_thresh)
-        
-        # 3. Morphological cleanup
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-        morphed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
-        eroded = cv2.erode(morphed, kernel, iterations=2)
-        
-        # 4. Find contours - Strategy A
-        contours_A, _ = cv2.findContours(eroded, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # 5. Strategy B: Adaptive Thresholding (Structure/Edges)
-        # Useful for non-uniform backgrounds where simple V-threshold fails
-        # We look for edges in the Value channel
-        # Use a large block size to ignore fine texture (e.g. 201)
-        # Higher C (e.g. 15) reduces noise/merged blobs (Scan was re-normalized so C=15 is strict enough)
-        thresh_block_size = 201
-        adaptive_mask = cv2.adaptiveThreshold(v_channel, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                            cv2.THRESH_BINARY_INV, thresh_block_size, 15)
-        
-        # Clean up adaptive mask
-        # Dilation helps connect the edges found by adaptive threshold
-        adaptive_mask = cv2.dilate(adaptive_mask, kernel, iterations=2)
-        adaptive_mask = cv2.morphologyEx(adaptive_mask, cv2.MORPH_CLOSE, kernel)
-        adaptive_mask = cv2.erode(adaptive_mask, kernel, iterations=1)
-        
-        contours_B, _ = cv2.findContours(adaptive_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Combine contours
-        all_contours = list(contours_A) + list(contours_B)
+        if not use_smart_detection:
+            # Legacy Logic (Contour/Threshold based)
+            
+            # 1. Convert to HSV (Use 8-bit version)
+            hsv = cv2.cvtColor(scan_8bit, cv2.COLOR_BGR2HSV)
+            s_channel = hsv[:,:,1]
+            v_channel = hsv[:,:,2]
+            
+            # 2. Strategy A: Standard Color/Value Masking
+            # Mask 1: Saturation (Color). Lowered to 30 to catch duller colors.
+            _, s_thresh = cv2.threshold(s_channel, 30, 255, cv2.THRESH_BINARY)
+            
+            # Mask 2: Value (Brightness). Catch dark items on white background.
+            v_thresh_val = sensitivity 
+            _, v_thresh = cv2.threshold(v_channel, v_thresh_val, 255, cv2.THRESH_BINARY_INV)
+            
+            # Combine: It's a photo if it has color OR is dark
+            combined_mask = cv2.bitwise_or(s_thresh, v_thresh)
+            
+            if ignore_black_background:
+                _, bg_thresh = cv2.threshold(v_channel, 40, 255, cv2.THRESH_BINARY)
+                combined_mask = cv2.bitwise_and(combined_mask, bg_thresh)
+            
+            # 3. Morphological cleanup
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+            morphed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+            eroded = cv2.erode(morphed, kernel, iterations=2)
+            
+            # 4. Find contours - Strategy A
+            contours_A, _ = cv2.findContours(eroded, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # 5. Strategy B: Adaptive Thresholding (Structure/Edges)
+            # Useful for non-uniform backgrounds where simple V-threshold fails
+            # We look for edges in the Value channel
+            # Use a large block size to ignore fine texture (e.g. 201)
+            # Higher C (e.g. 15) reduces noise/merged blobs (Scan was re-normalized so C=15 is strict enough)
+            thresh_block_size = 201
+            adaptive_mask = cv2.adaptiveThreshold(v_channel, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                                cv2.THRESH_BINARY_INV, thresh_block_size, 15)
+            
+            # Clean up adaptive mask
+            # Dilation helps connect the edges found by adaptive threshold
+            adaptive_mask = cv2.dilate(adaptive_mask, kernel, iterations=2)
+            adaptive_mask = cv2.morphologyEx(adaptive_mask, cv2.MORPH_CLOSE, kernel)
+            adaptive_mask = cv2.erode(adaptive_mask, kernel, iterations=1)
+            
+            contours_B, _ = cv2.findContours(adaptive_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Combine contours
+            all_contours = list(contours_A) + list(contours_B)
         
         # 6. Filter for photo-sized objects
         img_h, img_w = scan_8bit.shape[:2]
         full_area = img_h * img_w
         
         photo_candidates = []
-        for cnt in all_contours:
-            area = cv2.contourArea(cnt)
-            # Filter: must be at least 1% (smaller photos) but less than 95%
-            if (full_area * 0.01) < area < (full_area * 0.95):
-                # Additional Convexity Check
-                hull = cv2.convexHull(cnt)
-                hull_area = cv2.contourArea(hull)
-                solidity = float(area)/hull_area if hull_area > 0 else 0
-                
-                # Relaxed solidity to catch slightly jagged adaptive detections
-                if solidity > 0.4:  
-                    photo_candidates.append(cnt)
+        
+        if use_smart_detection:
+             # Smart detection already returns valid candidates sized correctly
+             # No need to filter by area again unless we want to remove tiny errors
+             photo_candidates = all_contours
+        else:
+            for cnt in all_contours:
+                area = cv2.contourArea(cnt)
+                # Filter: must be at least 1% (smaller photos) but less than 95%
+                if (full_area * 0.01) < area < (full_area * 0.95):
+                    # Additional Convexity Check
+                    hull = cv2.convexHull(cnt)
+                    hull_area = cv2.contourArea(hull)
+                    solidity = float(area)/hull_area if hull_area > 0 else 0
+                    
+                    # Relaxed solidity to catch slightly jagged adaptive detections
+                    if solidity > 0.4:  
+                        photo_candidates.append(cnt)
         
         # Deduplicate candidates (overlap check)
         # Sort by area descending so we keep largest valid ones
