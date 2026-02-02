@@ -121,7 +121,8 @@ async def trigger_scan(request: ScanRequest):
             auto_wb=request.auto_wb,
             grid_rows=request.grid_rows,
             grid_cols=request.grid_cols,
-            ignore_black_background=request.ignore_black_background
+            ignore_black_background=request.ignore_black_background,
+            dpi=request.dpi
         )
         
         # Modify returned paths to be URLs
