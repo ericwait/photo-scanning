@@ -56,7 +56,7 @@ export function PhotoCard({ photo, index, onRotate, onRefineOpen, onUpdateSettin
         }
     };
 
-    const displayUrl = photo.url.startsWith("http") ? photo.url : `http://localhost:8001${photo.url}`;
+    const displayUrl = photo.url.startsWith("http") ? photo.url : `http://localhost:8002${photo.url}`;
 
     return (
         <div className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col">

@@ -50,7 +50,7 @@ function App() {
   useEffect(() => { localStorage.setItem('gridCols', String(gridCols)); }, [gridCols]);
   useEffect(() => { localStorage.setItem('ignoreBlackBackground', String(ignoreBlackBackground)); }, [ignoreBlackBackground]);
 
-  const API_BASE = "http://localhost:8001";
+  const API_BASE = "http://localhost:8002";
 
   // Removed fetchHistory as history panel is gone
 

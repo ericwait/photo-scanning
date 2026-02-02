@@ -171,7 +171,31 @@ class ScannerService:
                 pass
 
             # 5. Acquire
-            ss.RequestAcquire(0, 0)
+            try:
+                ss.RequestAcquire(0, 0)
+            except Exception as e:
+                # If 48-bit failed, try falling back to 24-bit
+                if bit_depth == 48:
+                    print(f"Warning: 48-bit scan failed ({e}). Falling back to 24-bit.")
+                    # Reset capability to 24-bit (Image Type defaults to 24-bit RGB usually if we don't force higher depth)
+                    # We need to close/re-open or just set capability? 
+                    # SetCapability might fail if state is wrong (State 4 vs 3).
+                    # Actually, if RequestAcquire failed, we are likely still in State 4 (Negotiation).
+                    
+                    try:
+                        # Reset pixel type just in case
+                        ss.SetCapability(twain.ICAP_PIXELTYPE, twain.TWTY_UINT16, twain.TWPT_RGB)
+                        # Remove BitDepth constraint (set to default/reset) or set to 24/8 depending on driver.
+                        # Usually setting 8 per channel is safe.
+                        ss.SetCapability(twain.ICAP_BITDEPTH, twain.TWTY_UINT16, 24)
+                    except:
+                        pass
+                        
+                    # Retry acquire
+                    ss.RequestAcquire(0, 0)
+                else:
+                    raise e
+            
             
             # 6. Transfer Loop
             infos = ss.GetImageInfo()

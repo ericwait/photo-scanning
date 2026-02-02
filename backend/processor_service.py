@@ -44,12 +44,30 @@ class ProcessorService:
             if not os.path.exists(current_output_dir):
                 os.makedirs(current_output_dir)
 
+        # Optional: Auto-Detect and Crop Black Border (Scan Area)
+        # This handles cases where scan lid was open or medium is smaller than bed
+        scan_area_rect = self._detect_scan_area(scan_8bit)
+        
+        offset_x, offset_y = 0, 0
+        if scan_area_rect:
+            x, y, w, h = scan_area_rect
+            # Safety checks for valid crop
+            if w > 100 and h > 100:
+                print(f"Info: Cropping to Scan Area: {scan_area_rect}")
+                scan_8bit = scan_8bit[y:y+h, x:x+w]
+                # Update offset to adjust results later
+                offset_x, offset_y = x, y
+                
+                # Re-Normalize dynamic range if we just cropped out a massive black border
+                # This ensures the page/photo contrast is maximized in the histogram
+                scan_8bit = cv2.normalize(scan_8bit, None, 0, 255, cv2.NORM_MINMAX)
+        
         # 1. Convert to HSV (Use 8-bit version)
         hsv = cv2.cvtColor(scan_8bit, cv2.COLOR_BGR2HSV)
         s_channel = hsv[:,:,1]
         v_channel = hsv[:,:,2]
         
-        # 2. Create Masks
+        # 2. Strategy A: Standard Color/Value Masking
         # Mask 1: Saturation (Color). Lowered to 30 to catch duller colors.
         _, s_thresh = cv2.threshold(s_channel, 30, 255, cv2.THRESH_BINARY)
         
@@ -60,10 +78,6 @@ class ProcessorService:
         # Combine: It's a photo if it has color OR is dark
         combined_mask = cv2.bitwise_or(s_thresh, v_thresh)
         
-        # Optional: Black Background filtering (Bandpass)
-        # Apply to the COMBINED mask. 
-        # This ensures that even if saturation triggered detection (noise), 
-        # simple darkness (V < 40) will veto it.
         if ignore_black_background:
             _, bg_thresh = cv2.threshold(v_channel, 40, 255, cv2.THRESH_BINARY)
             combined_mask = cv2.bitwise_and(combined_mask, bg_thresh)
@@ -71,30 +85,139 @@ class ProcessorService:
         # 3. Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
         morphed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
-        
-        # Erode to peel off jagged edges or thin connections (like hole punch tabs)
-        # 2 iterations with 7x7 kernel = ~7-14 pixels shaving.
         eroded = cv2.erode(morphed, kernel, iterations=2)
         
-        # REMOVED dilation to prevent expanding the border
-        # dilated = cv2.dilate(morphed, kernel, iterations=1)
-
-        # 4. Find all contours - Use RETR_LIST to ensure we get internal contours if the background is detected
-        # Use 'eroded' to get tighter bounds and ignore artifacts
-        contours, _ = cv2.findContours(eroded, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        # 4. Find contours - Strategy A
+        contours_A, _ = cv2.findContours(eroded, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         
-        # 5. Filter for photo-sized objects
+        # 5. Strategy B: Adaptive Thresholding (Structure/Edges)
+        # Useful for non-uniform backgrounds where simple V-threshold fails
+        # We look for edges in the Value channel
+        # Use a large block size to ignore fine texture (e.g. 201)
+        # Higher C (e.g. 15) reduces noise/merged blobs (Scan was re-normalized so C=15 is strict enough)
+        thresh_block_size = 201
+        adaptive_mask = cv2.adaptiveThreshold(v_channel, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                            cv2.THRESH_BINARY_INV, thresh_block_size, 15)
+        
+        # Clean up adaptive mask
+        # Dilation helps connect the edges found by adaptive threshold
+        adaptive_mask = cv2.dilate(adaptive_mask, kernel, iterations=2)
+        adaptive_mask = cv2.morphologyEx(adaptive_mask, cv2.MORPH_CLOSE, kernel)
+        adaptive_mask = cv2.erode(adaptive_mask, kernel, iterations=1)
+        
+        contours_B, _ = cv2.findContours(adaptive_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Combine contours
+        all_contours = list(contours_A) + list(contours_B)
+        
+        # 6. Filter for photo-sized objects
         img_h, img_w = scan_8bit.shape[:2]
         full_area = img_h * img_w
         
         photo_candidates = []
-        for cnt in contours:
+        for cnt in all_contours:
             area = cv2.contourArea(cnt)
-            # Filter: must be at least 5% but less than 90% of the scanner bed
-            # We increased the upper bound slightly just in case, but usually photos are < 50%
-            if (full_area * 0.05) < area < (full_area * 0.90):
-                photo_candidates.append(cnt)
+            # Filter: must be at least 1% (smaller photos) but less than 95%
+            if (full_area * 0.01) < area < (full_area * 0.95):
+                # Additional Convexity Check
+                hull = cv2.convexHull(cnt)
+                hull_area = cv2.contourArea(hull)
+                solidity = float(area)/hull_area if hull_area > 0 else 0
+                
+                # Relaxed solidity to catch slightly jagged adaptive detections
+                if solidity > 0.4:  
+                    photo_candidates.append(cnt)
         
+        # Deduplicate candidates (overlap check)
+        # Sort by area descending so we keep largest valid ones
+        photo_candidates.sort(key=cv2.contourArea, reverse=True)
+        unique_candidates = []
+        
+        for cnt in photo_candidates:
+            # Check overlap with existing
+            is_new = True
+            rect1 = cv2.boundingRect(cnt)
+            
+            for existing in unique_candidates:
+                rect2 = cv2.boundingRect(existing)
+                
+                # Check intersection over union or containment
+                # Simple check: centers are close
+                c1 = (rect1[0] + rect1[2]/2, rect1[1] + rect1[3]/2)
+                c2 = (rect2[0] + rect2[2]/2, rect2[1] + rect2[3]/2)
+                dist = np.sqrt((c1[0]-c2[0])**2 + (c1[1]-c2[1])**2)
+                
+                # If centers are within 50px, assume duplicate/same object
+                if dist < 50:
+                    is_new = False
+                    break
+            
+            if is_new:
+                # 6b. Check for fused photos (Giant Blobs > 35% area)
+                area = cv2.contourArea(cnt)
+                if area > (full_area * 0.35):
+                    print(f"I: Attempting to split giant blob of area {area} via Watershed")
+                    mask = np.zeros((img_h, img_w), dtype=np.uint8)
+                    cv2.drawContours(mask, [cnt], -1, 255, -1)
+                    
+                    # Distance Transform
+                    dist_transform = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+                    # Lower threshold to get slightly larger markers, but keep high enough to break bridges
+                    # Increased to 0.5 to avoid noise peaks causing fragmentation
+                    ret, sure_fg = cv2.threshold(dist_transform, 0.5 * dist_transform.max(), 255, 0)
+                    sure_fg = np.uint8(sure_fg)
+                    
+                    # Markers
+                    ret, markers = cv2.connectedComponents(sure_fg)
+                    if ret > 2: # 1 is bg, so >2 means at least 2 foreground objects
+                        print(f"I: Found {ret-1} potential markers from peaks")
+                        
+                        # Add one to all regions so that sure background is not 0, but 1
+                        markers = markers + 1
+                        # Mark the region of unknown with zero
+                        unknown = cv2.subtract(mask, sure_fg)
+                        markers[unknown == 255] = 0
+                        
+                        # Run Watershed on Inverted Distance Map (Topography)
+                        # This ensures splitting follows the geometric 'valleys' between peaks
+                        dist_8u = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                        dist_bgr = cv2.cvtColor(dist_8u, cv2.COLOR_GRAY2BGR)
+                        ws_img = cv2.bitwise_not(dist_bgr) # Peaks become valleys (dark)
+                        cv2.watershed(ws_img, markers)
+                        
+                        found_subs = False
+                        unique_labels = np.unique(markers)
+                        temp_candidates = []
+                        unique_labels = np.unique(markers)
+                        for label in unique_labels:
+                            if label <= 1: continue 
+                            
+                            # Create mask for this label
+                            lbl_mask = np.zeros((img_h, img_w), dtype=np.uint8)
+                            lbl_mask[markers == label] = 255
+                            
+                            # Find contour (ensure we get the outer boundary)
+                            sub_contours, _ = cv2.findContours(lbl_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            if sub_contours:
+                                c = max(sub_contours, key=cv2.contourArea)
+                                if cv2.contourArea(c) > (full_area * 0.05):
+                                    temp_candidates.append(c)
+                        
+                        if temp_candidates:
+                            total_split_area = sum(cv2.contourArea(c) for c in temp_candidates)
+                            if total_split_area < (area * 0.6):
+                                print(f"W: Split area {total_split_area} too small vs {area}. Retaining original blob.")
+                                unique_candidates.append(cnt)
+                                continue
+                            
+                            unique_candidates.extend(temp_candidates)
+                            print("SUCCESS: Split merged blob via Watershed")
+                            continue
+
+                unique_candidates.append(cnt)
+        
+        photo_candidates = unique_candidates
+
         # Sort top-to-bottom, left-to-right (Row-major)
         # This handles grids (e.g. 2x2) correctly
         def get_center(cnt):
@@ -157,18 +280,23 @@ class ProcessorService:
             
             # Slightly shrink the box to ensure we don't pick up white margins
             (center, size, angle) = rect
-            size = (size[0] * 0.98, size[1] * 0.98) # Shrink 2%
+            
+            # ADJUST CENTER FOR CROP OFFSET!
+            center = (center[0] + offset_x, center[1] + offset_y)
             rect = (center, size, angle)
             
+            size = (size[0] * 0.98, size[1] * 0.98) # Shrink 2%
+            rect_shrink = (center, size, angle)
+            
             # Convert rect to points for returning
-            box = cv2.boxPoints(rect)
+            box = cv2.boxPoints(rect_shrink)
             box_points = np.array(box, dtype="int").tolist()
 
             try:
                 # Extract and straighten from original (possibly 16-bit) image
                 # Note: We pass the rect tuple to _get_warped... which converts to points internally
                 # But we also have box_points now.
-                cropped = self._get_warped_crop_from_rect(image, rect, crop_margin=crop_margin)
+                cropped = self._get_warped_crop_from_rect(image, rect_shrink, crop_margin=crop_margin)
                 
                 # Apply enhancements
                 cropped = self.apply_corrections(cropped, contrast=contrast, auto_contrast=auto_contrast, auto_wb=auto_wb)
@@ -214,6 +342,65 @@ class ProcessorService:
             })
             
         return results
+
+    def _detect_scan_area(self, image_8bit: np.ndarray) -> Tuple[int, int, int, int]:
+        """
+        Detects the active scan area (removes black void from open scanner lid).
+        Returns x, y, w, h of the content area. Returns None if full image is content.
+        """
+        h, w = image_8bit.shape[:2]
+        
+        # Use FloodFill from corners to find the Black Void
+        mask = np.zeros((h+2, w+2), np.uint8)
+        ff_img = image_8bit.copy()
+        
+        # Check corners. If they are NOT black, then we might strictly not have a black void.
+        # But let's run FloodFill with low tolerance on black/dark pixels.
+        
+        # We accumulate the mask of filled areas.
+        # Since floodFill modifies image, we use an accumulating mask approach or just correct seeds.
+        # Simplest: FloodFill from all 4 corners with value (255, 0, 0) (Blue).
+        
+        seeds = [(0,0), (0, h-1), (w-1, 0), (w-1, h-1)]
+        filled_something = False
+        
+        for seed in seeds:
+            # Check if seed is dark enough to be void?
+            # If seed is White, we shouldn't floodfill as "Void".
+            # Assume Void is < 20 brightness.
+            pixel = ff_img[seed[1], seed[0]]
+            if np.mean(pixel) < 40: # Allow some noise
+                cv2.floodFill(ff_img, mask, seed, (255, 0, 0), (10, 10, 10), (10, 10, 10), flags=cv2.FLOODFILL_FIXED_RANGE)
+                filled_something = True
+        
+        if not filled_something:
+            return None
+            
+        # Create mask of "Filled Void" (Blue pixels)
+        # Note: ff_img is BGR. Blue is (255,0,0).
+        lower_blue = np.array([255, 0, 0])
+        upper_blue = np.array([255, 0, 0])
+        void_mask = cv2.inRange(ff_img, lower_blue, upper_blue)
+        
+        # Content is NOT pixel of Void
+        content_mask = cv2.bitwise_not(void_mask)
+        
+        # Find Bounding Rect of Content
+        contours, _ = cv2.findContours(content_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if contours:
+            # Find largest content contour
+            largest = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(largest)
+            
+            # If Content is > 95% of Image, assume Full Image (No significant void)
+            if area > (w * h * 0.95):
+                return None
+                
+            x, y, cw, ch = cv2.boundingRect(largest)
+            return (x, y, cw, ch)
+            
+        return None
 
     def manual_crop(self, image_path: str, points: List[List[int]], photo_index: int, output_subfolder: str = None, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False) -> str:
         """
