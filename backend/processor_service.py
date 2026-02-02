@@ -12,7 +12,7 @@ class ProcessorService:
 
 
 
-    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False, grid_rows: int = 3, grid_cols: int = 1, ignore_black_background: bool = False, dpi: int = 300, use_smart_detection: bool = True) -> List[dict]:
+    def detect_and_crop(self, image_path: str, output_subfolder: str = None, sensitivity: int = 210, crop_margin: int = 10, contrast: float = 1.0, auto_contrast: bool = False, auto_wb: bool = False, grid_rows: int = 3, grid_cols: int = 1, ignore_black_background: bool = False, dpi: int = 300, use_smart_detection: bool = True, allowed_sizes: List[str] = None) -> List[dict]:
         """
         Detects multiple photos in a single scanned page and crops them.
         Returns: List of dicts { "path": str, "points": List[List[int]] }

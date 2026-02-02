@@ -50,6 +50,7 @@ class ScanRequest(BaseModel):
     grid_rows: int = 3
     grid_cols: int = 1
     ignore_black_background: bool = False
+    allowed_sizes: list[str] = None # e.g. ["PHOTO_4X6", "PHOTO_3X5"]
 
 @app.get("/health")
 def health_check():
@@ -122,7 +123,8 @@ async def trigger_scan(request: ScanRequest):
             grid_rows=request.grid_rows,
             grid_cols=request.grid_cols,
             ignore_black_background=request.ignore_black_background,
-            dpi=request.dpi
+            dpi=request.dpi,
+            allowed_sizes=request.allowed_sizes
         )
         
         # Modify returned paths to be URLs

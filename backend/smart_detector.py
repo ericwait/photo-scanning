@@ -21,7 +21,7 @@ class SmartDetector:
     def __init__(self):
         pass
 
-    def detect(self, image: np.ndarray, dpi: int) -> List[DetectionResult]:
+    def detect(self, image: np.ndarray, dpi: int, allowed_sizes: List[str] = None) -> List[DetectionResult]:
         """
         Detects photos in the scanned image using entropy/variance mapping 
         and standard size fitting.
@@ -29,6 +29,7 @@ class SmartDetector:
         Args:
             image: 8-bit BGR image (numpy array)
             dpi: Scan DPI
+            allowed_sizes: Optional list of size labels to allow (e.g. ["PHOTO_4X6", "PHOTO_3X5"])
         """
         if image is None:
             raise ValueError("Image is None")
@@ -53,7 +54,7 @@ class SmartDetector:
         #         cand["rect"] = refined_rect
         
         # 4. Fit Standard Sizes
-        results = self._optimize_fits(candidates, dpi, image.shape)
+        results = self._optimize_fits(candidates, dpi, image.shape, allowed_sizes)
         
         return results
 
@@ -72,7 +73,7 @@ class SmartDetector:
     # Preventing replace error, reverting to simple replacement of the method block above
     # Actually I used text replace. I should just target the loop.
 
-    def _optimize_fits(self, candidates: List[Dict], dpi: int, image_shape: Tuple[int, ...]) -> List[DetectionResult]:
+    def _optimize_fits(self, candidates: List[Dict], dpi: int, image_shape: Tuple[int, ...], allowed_sizes: List[str] = None) -> List[DetectionResult]:
         """
         Fits standard sizes to the candidates.
         """
@@ -87,8 +88,17 @@ class SmartDetector:
             best_label = "Unknown"
             best_size_px = (0, 0)
             
+            # Filter StandardSize enum based on allowed_sizes if present
+            sizes_to_check = []
+            if allowed_sizes:
+                for size in StandardSize:
+                    if size.name in allowed_sizes:
+                        sizes_to_check.append(size)
+            else:
+                sizes_to_check = list(StandardSize)
+            
             # Check against standard sizes
-            for size in StandardSize:
+            for size in sizes_to_check:
                 sw_in, sl_in = size.value
                 
                 # Convert to pixels
@@ -129,14 +139,13 @@ class SmartDetector:
                 final_label = best_label
                 final_confidence = 1.0 - (best_fit_score / tolerance)
                 
-            else:
-                 # Check relative error instead of absolute pixels
-                 # If dimensions are within 15% of a standard size, snap to it.
+            elif allowed_sizes and "Custom" not in allowed_sizes:
+                 # Strict mode: If allowed_sizes is set, we try relative error fitting for allowed sizes only.
                  best_rel_error = float('inf')
                  best_rel_size = None
                  best_rel_label = None
                  
-                 for size in StandardSize:
+                 for size in sizes_to_check:
                     sw_in, sl_in = size.value
                     sw_px = sw_in * dpi
                     sl_px = sl_in * dpi
@@ -166,6 +175,43 @@ class SmartDetector:
                      final_rect = ((cx, cy), final_size, angle)
                      final_label = best_rel_label
                      final_confidence = 0.8 - best_rel_error # Lower confidence than direct fit
+                 else:
+                     # Strict mode and no match found
+                     final_rect = None
+                     
+            else:
+                 # Original logic for fallback if allowed_sizes is NOT set (or includes Custom implicitly?)
+                 # For now, if allowed_sizes is None, we use existing fallback logic
+                 
+                 # ... existing relative error logic ...
+                 best_rel_error = float('inf')
+                 best_rel_size = None
+                 best_rel_label = None
+                 
+                 for size in sizes_to_check: # Logic duplicated but filtered by check list
+                    sw_in, sl_in = size.value
+                    sw_px = sw_in * dpi
+                    sl_px = sl_in * dpi
+                    
+                    std_min, std_max = sorted((sw_px, sl_px))
+                    detected_min, detected_max = sorted((w, h))
+                    
+                    err_min = abs(detected_min - std_min) / std_min
+                    err_max = abs(detected_max - std_max) / std_max
+                    avg_err = (err_min + err_max) / 2.0
+                    
+                    if avg_err < 0.20: 
+                        if avg_err < best_rel_error:
+                            best_rel_error = avg_err
+                            if w < h: best_rel_size = (std_min, std_max)
+                            else: best_rel_size = (std_max, std_min)
+                            best_rel_label = size.name
+                 
+                 if best_rel_size:
+                     final_size = best_rel_size
+                     final_rect = ((cx, cy), final_size, angle)
+                     final_label = best_rel_label
+                     final_confidence = 0.8 - best_rel_error 
                  else:
                      # True Custom
                      # Only accept if reasonably photosized (e.g. > 2x2 inches)

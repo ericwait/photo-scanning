@@ -34,11 +34,19 @@ def debug_pipeline():
     cv2.imwrite(os.path.join(output_dir, "smart_01_texture.png"), texture_map)
     print("Saved texture map")
     
+    print(f"Texture Map Stats: Mean={np.mean(texture_map):.2f}, Max={np.max(texture_map)}")
+    
     # 2. Candidates
-    candidates = detector._find_candidates(texture_map)
+    candidates = detector._find_candidates(texture_map, dpi)
+    # Sort by area
+    candidates.sort(key=lambda x: x['rect'][1][0] * x['rect'][1][1], reverse=True)
+    
     debug_cand = image.copy()
-    for c in candidates:
-        box = np.int64(cv2.boxPoints(c['rect']))
+    for i, c in enumerate(candidates[:5]):
+        rect = c['rect']
+        box = np.int64(cv2.boxPoints(rect))
+        (w, h) = rect[1]
+        print(f"Candidate {i}: Center={rect[0]}, Size={w:.0f}x{h:.0f}, Angle={rect[2]:.1f}")
         cv2.drawContours(debug_cand, [box], 0, (0, 0, 255), 2)
     cv2.imwrite(os.path.join(output_dir, "smart_02_candidates.png"), debug_cand)
     print(f"Found {len(candidates)} candidates")
