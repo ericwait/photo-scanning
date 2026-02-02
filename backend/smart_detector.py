@@ -98,7 +98,9 @@ class SmartDetector:
             else:
                 sizes_to_check = list(StandardSize)
             
-            # Check against standard sizes
+            print(f"DEBUG: Candidate {rect[1]} (dpi={dpi})")
+
+            # Check against allowed standard sizes
             for size in sizes_to_check:
                 sw_in, sl_in = size.value
                 
@@ -112,6 +114,8 @@ class SmartDetector:
                 # Check orientation 2: (w ~ sl, h ~ sw)
                 score2 = abs(w - sl_px) + abs(h - sw_px)
                 
+                print(f"  Check {size.name}: {sw_px:.0f}x{sl_px:.0f} vs {w:.0f}x{h:.0f} -> S1={score1:.0f}, S2={score2:.0f}")
+
                 if score1 < best_fit_score:
                     best_fit_score = score1
                     best_label = size.name
@@ -397,86 +401,3 @@ class SmartDetector:
             
         return candidates
 
-    def _optimize_fits(self, candidates: List[Dict], dpi: int, image_shape: Tuple[int, ...]) -> List[DetectionResult]:
-        """
-        Fits standard sizes to the candidates.
-        """
-        results = []
-        
-        for cand in candidates:
-            # Get the candidate approximate size in pixels
-            rect = cand["rect"]
-            (cx, cy), (w, h), angle = rect
-            
-            # Normalize w, h so w is always the smaller dimension for comparison
-            dim1, dim2 = sorted((w, h))
-            
-            best_fit_score = float('inf')
-            best_label = "Unknown"
-            best_points = None
-            
-            # Check against standard sizes
-            for size in StandardSize:
-                sw_in, sl_in = size.value
-                
-                # Convert to pixels
-                sw_px = sw_in * dpi
-                sl_px = sl_in * dpi
-                
-                # Check both orientations
-                # 1. Match dim1 to sw_px, dim2 to sl_px
-                # Score = abs(diff_w) + abs(diff_h)
-                score1 = abs(dim1 - sw_px) + abs(dim2 - sl_px)
-                
-                # We could also check rotated? But dim1/dim2 are sorted
-                
-                if score1 < best_fit_score:
-                    best_fit_score = score1
-                    best_label = size.name
-                    # Create a box of this size centered at cx, cy with angle
-                    # for now just taking the minAreaRect box, but ideally we force the aspect ratio
-            
-            # If the best score is reasonable (e.g. within 1 inch error?)
-            # 1 inch = dpi pixels.
-            tolerance = dpi * 1.0 
-            
-            if best_fit_score < tolerance:
-                
-                # Force the box to be exactly the standard size
-                # Determine orientation
-                # If the detection says it's portrait (h > w), we use the portrait version of standard size
-                # StandardSize values are typically (min, max) or just defined. 
-                # Let's ensure sw_px is the smaller, sl_px is the larger
-                std_min, std_max = sorted((sw_px, sl_px))
-                
-                # Check detection orientation
-                if w < h:
-                    new_size = (std_min, std_max)
-                else:
-                    new_size = (std_max, std_min)
-                
-                # Create a new rect with the standard size
-                new_rect = ((cx, cy), new_size, angle)
-                
-                # Convert rotated rect to 4 points
-                box = cv2.boxPoints(new_rect)
-                box = np.int64(box)
-                
-                results.append(DetectionResult(
-                    box=box.tolist(),
-                    confidence=1.0 - (best_fit_score / tolerance), # rough confidence
-                    size_label=best_label
-                ))
-            else:
-                 # If it doesn't match a standard size well, maybe keep it anyway if it's large enough?
-                 # For now, simplistic acceptance if large enough
-                 if dim1 > dpi * 2 and dim2 > dpi * 2: # Min 2x2 inches
-                    box = cv2.boxPoints(rect)
-                    box = np.int64(box)
-                    results.append(DetectionResult(
-                        box=box.tolist(),
-                        confidence=0.5,
-                        size_label="Custom"
-                    ))
-                    
-        return results
