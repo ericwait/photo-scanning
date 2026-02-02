@@ -106,21 +106,6 @@ function App() {
     });
   };
 
-  // ... (rest of methods)
-  // Re-define handleScan and toggleSize helper before return, but I replaced the whole block 
-  // Wait, I need to make sure I don't delete other methods.
-  // I will just return the full component code block for safety since I am replacing a large chunk.
-  // Actually, I can just replace the state init block and the handleScan block.
-  // But I also need to insert the UI code.
-  // Let's replace state init first. Then handleScan. Then UI.
-  // But wait, the tool requires contiguous blocks? No, multiple chunks allowed? No, I must use multi_replace for that.
-
-  // I will use multi_replace.
-
-  return (
-    // ...
-  )
-
   const openRefine = (index: number) => {
     setRefinePhotoIndex(index);
     setIsRefineOpen(true);
